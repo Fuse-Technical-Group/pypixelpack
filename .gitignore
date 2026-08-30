@@ -1,0 +1,10 @@
+# Agent worktrees and session state
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+dist/
+.pytest_cache/
+.ruff_cache/

@@ -1,0 +1,101 @@
+[project]
+name = "pypixelpack"
+# Version derives from git tags (hatch-vcs); flywheel cuts the tags.
+dynamic = ["version"]
+description = "Pixel layouts and wire encodings for video I/O, device-free"
+authors = [
+    { name = "Ritchie Argue", email = "4462072+repentsinner@users.noreply.github.com" },
+]
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+keywords = ["v210", "r210", "ycbcr", "pixel-format", "sdi", "decklink", "st2110"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+# numpy is the reference backend and the only dependency; torch is a
+# caller-supplied namespace, never a dependency (§spec:backend).
+dependencies = [
+    "numpy>=2.3.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/Fuse-Technical-Group/pypixelpack"
+Repository = "https://github.com/Fuse-Technical-Group/pypixelpack.git"
+Issues = "https://github.com/Fuse-Technical-Group/pypixelpack/issues"
+Changelog = "https://github.com/Fuse-Technical-Group/pypixelpack/releases"
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pypixelpack"]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.403",
+    "pytest>=8.4.1",
+    "ruff>=0.12.3",
+    # The parity suite's second backend (§spec:backend). Dev-only: torch is
+    # never a runtime dependency, and CPU wheels keep CI honest and small.
+    "torch>=2.8",
+]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP", "ARG", "C90", "T20", "SIM", "TC", "RUF", "PGH003"]
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ARG", "T20"]
+"tools/*" = ["T20"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pypixelpack"]
+split-on-trailing-comma = true
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pyright]
+include = ["pypixelpack", "tests", "tools"]
+exclude = ["**/__pycache__"]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+reportMissingImports = true
+reportUnusedImport = true
+reportUnusedVariable = true
+reportMissingParameterType = true
+reportUnnecessaryTypeIgnoreComment = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
