@@ -34,7 +34,7 @@ dependencies = [
 Homepage = "https://github.com/Fuse-Technical-Group/pypixelpack"
 Repository = "https://github.com/Fuse-Technical-Group/pypixelpack.git"
 Issues = "https://github.com/Fuse-Technical-Group/pypixelpack/issues"
-Changelog = "https://github.com/Fuse-Technical-Group/pypixelpack/releases"
+Changelog = "https://github.com/Fuse-Technical-Group/pypixelpack/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]

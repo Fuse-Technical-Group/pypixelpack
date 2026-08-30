@@ -65,7 +65,8 @@ downstream can detect.
 
 ## Constraints §req:constraints
 
-- Repository under Fuse-Technical-Group; BSD-3-Clause.
+- Public repository under Fuse-Technical-Group; BSD-3-Clause;
+  published to PyPI as `pypixelpack`.
 - Seeded by extraction: pydecklink's layouts and the GPU pipeline's
   encoding move verbatim before any reshaping; adoption is behind one
   release each.
