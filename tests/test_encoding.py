@@ -190,7 +190,8 @@ def test_unknown_parameters_are_refused() -> None:
 def test_legal_codes_per_levels_and_depth(
     levels: str, bits: int, luma: range, chroma: range
 ) -> None:
-    assert legal_codes(levels=levels, bits=bits) == (luma, chroma)
+    codes = legal_codes(levels=levels, bits=bits)
+    assert (codes.luma, codes.chroma) == (luma, chroma)
 
 
 def test_legal_codes_is_what_encode_produces() -> None:
@@ -268,3 +269,19 @@ def test_a_keyword_that_contradicts_the_layout_is_refused() -> None:
         encode(_rgb(_RED), layout="v210", subsampling="444")
     with pytest.raises(ValueError, match="no component encoding"):
         encode(_rgb(_RED), layout="r210")
+
+
+def test_chroma_mid_is_the_code_a_neutral_patch_carries() -> None:
+    """Not derivable from the chroma span, which is why it is exposed.
+
+    Narrow 10-bit chroma runs 64..960; its own midpoint is 512 only by
+    coincidence of the span being symmetric, and at other depths a
+    caller working it out from the bounds gets it wrong.
+    """
+    for bits in (8, 10, 12):
+        for levels in ("narrow", "full"):
+            assert legal_codes(levels=levels, bits=bits).chroma_mid == 1 << (bits - 1)
+    neutral = np.full((1, 1, 3), 0.5, dtype=np.float32)
+    codes = encode(neutral, bits=10, levels="narrow", subsampling="444")
+    mid = legal_codes(levels="narrow", bits=10).chroma_mid
+    assert int(codes[0, 0, 1]) == mid and int(codes[0, 0, 2]) == mid

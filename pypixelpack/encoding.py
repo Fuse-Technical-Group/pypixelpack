@@ -55,6 +55,16 @@ class LegalCodes(NamedTuple):
 
     luma: range
     chroma: range
+    chroma_mid: int
+    """The code carrying no colour difference — a neutral patch's Cb and Cr.
+
+    Exposed because it cannot be derived from `chroma` alone: narrow
+    10-bit chroma runs 64..960, whose midpoint is 512 rather than the 512
+    a caller would get from the range's own bounds. A consumer driving
+    neutral codes onto the wire needs it, and re-deriving `1 << (bits - 1)`
+    outside this library puts the wire's arithmetic somewhere that does
+    not own it.
+    """
 
 
 class _Span(NamedTuple):
@@ -98,7 +108,7 @@ def legal_codes(*, levels: str = "narrow", bits: int = _DEFAULT_BITS) -> LegalCo
     which ones survive.
     """
     span = _span(levels, bits)
-    return LegalCodes(span.luma, span.chroma)
+    return LegalCodes(span.luma, span.chroma, span.chroma_mid)
 
 
 def encoding_for(layout: str) -> tuple[int, str]:
