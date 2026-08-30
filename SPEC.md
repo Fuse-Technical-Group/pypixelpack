@@ -154,7 +154,7 @@ levels in a 10-bit container as valid bytes and a wrong picture; the
 
 ## Consumers §spec:consumers
 
-*Status: in progress*
+*Status: complete*
 
 pydecklink imports the layouts and keeps the map from its `PixelFormat`
 enum to a layout name; its `pack`/`unpack` surface is unchanged and
