@@ -1,0 +1,72 @@
+name: publish
+
+# Publishes the sdist and wheel to PyPI via Trusted Publishing (OIDC) — no API
+# tokens. SPEC.md names `pypixelpack` on PyPI as the distribution.
+#
+# Trigger: the version tag flywheel cuts. Flywheel pushes tags with its GitHub
+# App token, and App-token pushes start workflow runs (only GITHUB_TOKEN-driven
+# events do not). workflow_dispatch publishes a tag that predates this file.
+#
+# The `pypi` environment carries a required reviewer, so nothing reaches PyPI
+# until someone approves the run. PyPI's trusted publisher is bound to this
+# filename and that environment name; renaming either breaks publishing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to publish, e.g. v0.2.0"
+        required: true
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0  # hatch-vcs derives the version from tag history
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.12"
+      - run: uv build
+      # hatch-vcs reads a dirty or off-tag checkout as a dev version; refuse
+      # to publish anything but the exact tag.
+      - name: Check the built version is the tag's
+        run: |
+          expected="${TAG#v}"
+          for f in dist/*; do
+            case "$(basename "$f")" in
+              "pypixelpack-${expected}.tar.gz" | "pypixelpack-${expected}-"*.whl) ;;
+              *) echo "::error::$f is not version ${expected}"; exit 1 ;;
+            esac
+          done
+      - run: uv run --isolated --no-project --with dist/*.whl python tools/check_core_install.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pypixelpack
+    permissions:
+      id-token: write  # mint the OIDC token PyPI Trusted Publishing verifies
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
