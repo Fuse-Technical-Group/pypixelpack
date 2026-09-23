@@ -113,10 +113,15 @@ _RGB10: dict[str, tuple[tuple[int, int, int], bool]] = {
 # byte-swapped. Component pairs per 8-pixel group.
 _R12_PAIRS = 12
 
-# Ay10 packs a pixel pair into two big-endian words, each holding one
-# chroma sample, one luma and one alpha at these bit offsets: word 0 is
-# Cb0 Y0 A0, word 1 is Cr0 Y1 A1. Bits 1:0 are padding.
-_AY10_CHROMA_LO, _AY10_LUMA_LO, _AY10_ALPHA_LO = 22, 12, 2
+# Ay10 packs a pixel pair into two big-endian words of the r210 word
+# shape — bits 31:30 padding, then three 10-bit fields from the top:
+# word 0 is A0 [29:20], Cb0 [19:10], Y0 [9:0]; word 1 is A1, Cr0, Y1.
+# Source: Blackmagic DeckLink SDK manual §3.4 "bmdFormat10BitYUVA"
+# (15.3 p.254; 16.0 p.262, unchanged). It is the only reference: no
+# FFmpeg, CoreVideo or SMPTE document describes the tag. The diagram
+# labels the alpha of both words A0 while its text counts six
+# components per pair, so alpha is read as per pixel.
+_AY10_ALPHA_LO, _AY10_CHROMA_LO, _AY10_LUMA_LO = 20, 10, 0
 _AY10_PAIR_BYTES = 8
 _A = 3  # alpha's channel index in a four-channel pixel
 
