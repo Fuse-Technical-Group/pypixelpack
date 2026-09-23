@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 from conftest import frame
 
-from pypixelpack import LAYOUTS, pack, row_bytes, unpack
+from pypixelpack import ALPHA_LAYOUTS, LAYOUTS, channels, pack, row_bytes, unpack
 
 # --- Surface ----------------------------------------------------------------
 
@@ -33,10 +33,20 @@ def test_layout_table_is_public() -> None:
         "2vuy",
         "r12b",
         "r12l",
+        "ay10",
     }
     assert LAYOUTS["v210"] == (6, 16, 10)
     assert LAYOUTS["2vuy"] == (2, 4, 8)
     assert LAYOUTS["r12b"] == (8, 36, 12)
+    assert LAYOUTS["ay10"] == (64, 256, 10)
+
+
+def test_alpha_layouts_carry_four_channels() -> None:
+    """A layout in ``ALPHA_LAYOUTS`` packs a fourth, per-pixel alpha channel;
+    every other layout packs three."""
+    assert set(ALPHA_LAYOUTS) == {"ay10"}
+    assert channels("ay10") == 4
+    assert all(channels(layout) == 3 for layout in LAYOUTS if layout != "ay10")
 
 
 # --- 8-bit RGB golden vectors ----------------------------------------------
@@ -107,6 +117,38 @@ def test_v210_byte_exact() -> None:
         0x53,
         0x04,
     ]
+
+
+# --- 10-bit YUVA (Ay10) golden vector --------------------------------------
+
+
+def test_ay10_byte_exact() -> None:
+    """Ay10: a pixel pair in two big-endian words, ``Cb0/Cr0 [31:22]``,
+    ``Y [21:12]``, ``A [11:2]``; 64 pixels per 256-byte group, so a
+    2-pixel line is one word pair and zero padding (SDK 3.4)."""
+    px = np.array(
+        [[[0x040, 0x200, 0x300, 0x3FF], [0x0C8, 0, 0, 0x000]]],  # Y, Cb, Cr, A
+        dtype=np.uint16,
+    )
+    out = pack(px, "ay10", row_bytes=256)
+    assert out.shape == (256,)
+    assert out[:8].tolist() == [0x80, 0x04, 0x0F, 0xFC, 0xC0, 0x0C, 0x80, 0x00]
+    assert not out[8:].any()
+
+
+def test_ay10_alpha_is_per_pixel_and_chroma_is_per_pair() -> None:
+    """Alpha survives unpack on odd pixels where chroma does not."""
+    px = np.array(
+        [[[100, 200, 300, 1], [101, 200, 300, 1022]]],  # Y, Cb, Cr, A
+        dtype=np.uint16,
+    )
+    back = unpack(pack(px, "ay10", row_bytes=256), "ay10", 2, 1, 256)
+    np.testing.assert_array_equal(back, px)
+
+
+def test_ay10_refuses_three_channels() -> None:
+    with pytest.raises(ValueError, match="shape"):
+        pack(np.zeros((1, 2, 3), np.uint16), "ay10", row_bytes=256)
 
 
 # --- 8-bit YUV (2vuy) golden vector ----------------------------------------

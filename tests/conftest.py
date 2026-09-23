@@ -9,18 +9,21 @@ from __future__ import annotations
 
 import numpy as np
 
-from pypixelpack import LAYOUTS, SUBSAMPLED_422
+from pypixelpack import LAYOUTS, SUBSAMPLED_422, channels
 
 
 def frame(layout: str, height: int, width: int, seed: int = 0) -> np.ndarray:
-    """A random ``(height, width, 3)`` frame of in-range values for ``layout``."""
+    """A random ``(height, width, channels)`` frame of in-range values for
+    ``layout``: three channels, or four for a layout that carries alpha."""
     bits = LAYOUTS[layout][2]
     rng = np.random.default_rng((seed, sum(map(ord, layout))))
     dtype = np.uint8 if bits == 8 else np.uint16
-    px = rng.integers(0, 1 << bits, size=(height, width, 3)).astype(dtype)
+    px = rng.integers(0, 1 << bits, size=(height, width, channels(layout))).astype(
+        dtype
+    )
     if layout in SUBSAMPLED_422:
         pairs = 2 * (width // 2)  # an odd trailing column has no partner
-        px[:, 1:pairs:2, 1:] = px[:, 0:pairs:2, 1:]
+        px[:, 1:pairs:2, 1:3] = px[:, 0:pairs:2, 1:3]  # chroma only; alpha is per pixel
     return px
 
 
