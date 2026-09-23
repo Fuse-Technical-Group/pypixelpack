@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 from conftest import rgb_frame
 
-from pypixelpack import ENCODINGS, SUBSAMPLED_422, pack, row_bytes, unpack
+from pypixelpack import ENCODINGS, SUBSAMPLED_422, channels, pack, row_bytes, unpack
 from pypixelpack.encoding import decode, encode, encoding_for, legal_codes
 
 # Half a code in each component, mapped through the widest inverse
@@ -249,8 +249,15 @@ def test_layout_selects_the_encoding_the_wire_expects(layout: str, width: int) -
             codes[:, 1::2, 1:], codes[:, 0 : 2 * (width // 2) : 2, 1:]
         )
     rb = row_bytes(layout, width)
-    back = unpack(pack(codes, layout, rb), layout, width, 3, rb)
-    np.testing.assert_array_equal(back, codes)
+    samples = codes
+    if channels(layout) == 4:
+        # ``encode`` stops at the colour samples; a layout that carries
+        # alpha takes the caller's own plane as its fourth channel.
+        alpha = np.full((*codes.shape[:2], 1), (1 << bits) - 1, dtype=codes.dtype)
+        samples = np.concatenate((codes, alpha), axis=-1)
+    back = unpack(pack(samples, layout, rb), layout, width, 3, rb)
+    np.testing.assert_array_equal(back, samples)
+    back = back[..., :3]
     assert (
         float(np.abs(decode(back, layout=layout) - decode(codes, bits=bits)).max()) == 0
     )

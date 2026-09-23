@@ -46,17 +46,19 @@ data = pack(codes, "v210", row_bytes=5120, xp=torch)
 
 ## API
 
-- `pack(pixels, layout, row_bytes, *, xp=numpy)` — `(H, W, 3)` integer
-  samples to a 1-D `uint8` buffer of `H × row_bytes` in `layout`, on the
-  input's device (`§spec:layouts`). RGB layouts take `[R, G, B]`; `v210`
-  and `2vuy` take `[Y, Cb, Cr]` with chroma read from even columns.
+- `pack(pixels, layout, row_bytes, *, xp=numpy)` — `(H, W, channels)`
+  integer samples to a 1-D `uint8` buffer of `H × row_bytes` in `layout`,
+  on the input's device (`§spec:layouts`). RGB layouts take `[R, G, B]`;
+  `v210` and `2vuy` take `[Y, Cb, Cr]` with chroma read from even
+  columns; `ay10` takes `[Y, Cb, Cr, A]` with a per-pixel alpha.
 - `unpack(data, layout, width, height, row_bytes, *, xp=numpy)` — the
   inverse; `unpack(pack(x)) == x` for every layout. Returns `uint8` for
   8-bit layouts and `uint16` otherwise.
 - `row_bytes(layout, width)` — the smallest `row_bytes` that holds a line.
+- `channels(layout)` — 3, or 4 for a layout in `ALPHA_LAYOUTS`.
 - `LAYOUTS` — the layout table, `name → (pixels per group, bytes per
   group, bit depth)`: `argb`, `bgra`, `r210`, `r10b`, `r10l`, `v210`,
-  `2vuy`, `r12b`, `r12l`.
+  `2vuy`, `r12b`, `r12l`, `ay10`.
 
 `pack` raises `ValueError` for an unknown layout, a `row_bytes` shorter
 than the packed line, or a sample above the layout's bit depth; the

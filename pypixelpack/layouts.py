@@ -5,12 +5,14 @@
 recovers pixel values from such a buffer. ``unpack(pack(x)) == x`` for
 every layout.
 
-Pixel arrays are ``(height, width, 3)`` integer arrays. For RGB layouts
-the channels are ``[R, G, B]``; the alpha channel of ARGB/BGRA is written
-at peak on pack and dropped on unpack. For the 4:2:2 YUV layouts v210
-and 2vuy the channels are ``[Y, Cb, Cr]``; chroma is sampled from even
-columns on pack and replicated across each pair on unpack, so round-trip
-identity holds when chroma is equal within each horizontal pair.
+Pixel arrays are ``(height, width, channels)`` integer arrays. For RGB
+layouts the channels are ``[R, G, B]``; the alpha channel of ARGB/BGRA
+is written at peak on pack and dropped on unpack. For the 4:2:2 YUV
+layouts v210 and 2vuy the channels are ``[Y, Cb, Cr]``; chroma is
+sampled from even columns on pack and replicated across each pair on
+unpack, so round-trip identity holds when chroma is equal within each
+horizontal pair. A layout in ``ALPHA_LAYOUTS`` (ay10) takes a fourth
+channel, ``[Y, Cb, Cr, A]``, and carries alpha per pixel.
 
 Both functions take the array namespace as ``xp`` — numpy by default,
 torch for a frame that stays on its device — and every array operation
@@ -31,7 +33,16 @@ import numpy as np
 
 from pypixelpack._backend import astype, contiguous, is_compiling
 
-__all__ = ["ENCODINGS", "LAYOUTS", "SUBSAMPLED_422", "pack", "row_bytes", "unpack"]
+__all__ = [
+    "ALPHA_LAYOUTS",
+    "ENCODINGS",
+    "LAYOUTS",
+    "SUBSAMPLED_422",
+    "channels",
+    "pack",
+    "row_bytes",
+    "unpack",
+]
 
 if sys.byteorder != "little":  # pragma: no cover
     raise ImportError(
@@ -54,19 +65,30 @@ LAYOUTS: dict[str, tuple[int, int, int]] = {
     "2vuy": (2, 4, 8),
     "r12b": (8, 36, 12),
     "r12l": (8, 36, 12),
+    # The SDK aligns each Ay10 line to 256 bytes, which is 64 pixels at
+    # 4 bytes each; the word pair below is the packing unit.
+    "ay10": (64, 256, 10),
 }
 
 # The component encoding a layout carries — (bits, subsampling) — for the
-# layouts that carry one; RGB layouts take code values as given.
+# layouts that carry one; RGB layouts take code values as given. Alpha
+# is outside the encoding: ay10 carries it full range at the layout's
+# depth, as the caller's own fourth channel.
 ENCODINGS: dict[str, tuple[int, str]] = {
     "v210": (10, "422"),
     "2vuy": (8, "422"),
+    "ay10": (10, "422"),
 }
 
 # Layouts whose chroma is shared across each horizontal pair.
 SUBSAMPLED_422: frozenset[str] = frozenset(
     name for name, (_, subsampling) in ENCODINGS.items() if subsampling == "422"
 )
+
+# Layouts that take a fourth, per-pixel alpha channel.
+ALPHA_LAYOUTS: frozenset[str] = frozenset({"ay10"})
+
+_COLOUR_CHANNELS, _ALPHA_CHANNELS = 3, 4
 
 # Memory order of a group's bytes for the 8-bit layouts: (pixel in
 # group, channel), or ``None`` for the alpha byte. On unpack a component
@@ -91,12 +113,30 @@ _RGB10: dict[str, tuple[tuple[int, int, int], bool]] = {
 # byte-swapped. Component pairs per 8-pixel group.
 _R12_PAIRS = 12
 
+# Ay10 packs a pixel pair into two big-endian words of the r210 word
+# shape — bits 31:30 padding, then three 10-bit fields from the top:
+# word 0 is A0 [29:20], Cb0 [19:10], Y0 [9:0]; word 1 is A1, Cr0, Y1.
+# Source: Blackmagic DeckLink SDK manual §3.4 "bmdFormat10BitYUVA"
+# (15.3 p.254; 16.0 p.262, unchanged). It is the only reference: no
+# FFmpeg, CoreVideo or SMPTE document describes the tag. The diagram
+# labels the alpha of both words A0 while its text counts six
+# components per pair, so alpha is read as per pixel.
+_AY10_ALPHA_LO, _AY10_CHROMA_LO, _AY10_LUMA_LO = 20, 10, 0
+_AY10_PAIR_BYTES = 8
+_A = 3  # alpha's channel index in a four-channel pixel
+
 
 def _layout(layout: str) -> tuple[int, int, int]:
     spec = LAYOUTS.get(layout)
     if spec is None:
         raise ValueError(f"unknown layout: {layout!r}")
     return spec
+
+
+def channels(layout: str) -> int:
+    """The channel count a ``layout`` packs: 4 with alpha, otherwise 3."""
+    _layout(layout)
+    return _ALPHA_CHANNELS if layout in ALPHA_LAYOUTS else _COLOUR_CHANNELS
 
 
 def row_bytes(layout: str, width: int) -> int:
@@ -109,17 +149,18 @@ _min_row_bytes = row_bytes  # `row_bytes` is also a parameter name below
 
 
 def pack(pixels: Any, layout: str, row_bytes: int, *, xp: Any = np) -> Any:
-    """Pack ``(height, width, 3)`` integer pixel values into ``layout``.
+    """Pack ``(height, width, channels)`` integer pixel values into ``layout``.
 
     Returns a 1-D ``uint8`` array of length ``height * row_bytes`` on
     ``xp``, on the input's device. ``row_bytes`` must be at least the
     packed active-line size; extra bytes are zero padding.
     """
     group_px, _, bits = _layout(layout)
+    nch = channels(layout)
     arr = xp.asarray(pixels)
-    if arr.ndim != 3 or arr.shape[2] != 3:
+    if arr.ndim != 3 or arr.shape[2] != nch:
         raise ValueError(
-            f"pixels must have shape (height, width, 3), got {tuple(arr.shape)}"
+            f"pixels must have shape (height, width, {nch}), got {tuple(arr.shape)}"
         )
     height, width, _ = arr.shape
 
@@ -144,7 +185,7 @@ def pack(pixels: Any, layout: str, row_bytes: int, *, xp: Any = np) -> Any:
     padded_w = -(-width // group_px) * group_px
     if padded_w != width:
         pad = xp.zeros(
-            (height, padded_w - width, 3), dtype=src.dtype, device=src.device
+            (height, padded_w - width, nch), dtype=src.dtype, device=src.device
         )
         src = xp.concatenate([src, pad], axis=1)
 
@@ -169,7 +210,7 @@ def unpack(
     *,
     xp: Any = np,
 ) -> Any:
-    """Recover ``(height, width, 3)`` pixel values from a ``layout`` buffer.
+    """Recover ``(height, width, channels)`` pixel values from a ``layout`` buffer.
 
     Inverse of :func:`pack`. Returns ``uint8`` values for 8-bit layouts and
     ``uint16`` for 10/12-bit layouts, on ``xp``, on the input's device.
@@ -211,9 +252,9 @@ def _bytes_to_words(xp: Any, data: Any, big_endian: bool) -> Any:
 
 
 # --- per-layout codecs ------------------------------------------------------
-# Every packer takes (xp, layout, src) with src (height, padded_width, 3)
-# and returns (height, min_row) uint8; every unpacker is its inverse on
-# (height, min_row) and returns (height, padded_width, 3).
+# Every packer takes (xp, layout, src) with src (height, padded_width,
+# channels) and returns (height, min_row) uint8; every unpacker is its
+# inverse on (height, min_row) and returns (height, padded_width, channels).
 
 
 def _pack_bytes(xp: Any, layout: str, src: Any) -> Any:
@@ -294,6 +335,44 @@ def _unpack_v210(xp: Any, layout: str, data: Any) -> Any:  # noqa: ARG001 — on
     return out.reshape(height, -1, 3)
 
 
+def _pack_ay10(xp: Any, layout: str, src: Any) -> Any:  # noqa: ARG001 — one codec signature
+    height = src.shape[0]
+    g = src.reshape(height, -1, 2, _ALPHA_CHANNELS)
+    y, cb, cr, a = g[..., _Y], g[..., _CB], g[..., _CR], g[..., _A]
+    words = xp.stack(
+        (
+            (cb[..., 0] << _AY10_CHROMA_LO)
+            | (y[..., 0] << _AY10_LUMA_LO)
+            | (a[..., 0] << _AY10_ALPHA_LO),
+            (cr[..., 0] << _AY10_CHROMA_LO)
+            | (y[..., 1] << _AY10_LUMA_LO)
+            | (a[..., 1] << _AY10_ALPHA_LO),
+        ),
+        axis=-1,
+    )
+    return _words_to_bytes(xp, words, True).reshape(height, -1)
+
+
+def _unpack_ay10(xp: Any, layout: str, data: Any) -> Any:  # noqa: ARG001 — one codec signature
+    height = data.shape[0]
+    words = _bytes_to_words(xp, data.reshape(height, -1, _AY10_PAIR_BYTES), True)
+    w0, w1 = words[..., 0], words[..., 1]
+
+    def field(word: Any, lo: int) -> Any:
+        return astype((word >> lo) & 0x3FF, xp.uint16)
+
+    cb, cr = field(w0, _AY10_CHROMA_LO), field(w1, _AY10_CHROMA_LO)
+    # (pixel, channel) in raster order with chroma shared per pair.
+    out = xp.stack(
+        (
+            field(w0, _AY10_LUMA_LO), cb, cr, field(w0, _AY10_ALPHA_LO),
+            field(w1, _AY10_LUMA_LO), cb, cr, field(w1, _AY10_ALPHA_LO),
+        ),
+        axis=-1,
+    )  # fmt: skip
+    return out.reshape(height, -1, _ALPHA_CHANNELS)
+
+
 def _pack_12bit(xp: Any, layout: str, src: Any) -> Any:
     height = src.shape[0]
     pairs = src.reshape(height, -1, _R12_PAIRS, 2)
@@ -329,5 +408,6 @@ _CODECS: dict[str, tuple[Any, Any]] = {
     "2vuy": (_pack_bytes, _unpack_bytes),
     "r12b": (_pack_12bit, _unpack_12bit),
     "r12l": (_pack_12bit, _unpack_12bit),
+    "ay10": (_pack_ay10, _unpack_ay10),
 }
 assert set(_CODECS) == set(LAYOUTS)
