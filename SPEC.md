@@ -72,19 +72,21 @@ that its bytes match the eager and numpy paths
 
 A layout names how integer component samples sit in a byte buffer:
 its pixel group, bytes per group, and bit depth. `pack(pixels, layout,
-row_bytes)` takes `(H, W, 3)` integer samples and returns a 1-D byte
-buffer of `H × row_bytes`; `unpack` is its inverse, and `unpack ∘ pack`
-is identity for every layout. Layouts are keyed by plain string, and
-the table is public.
+row_bytes)` takes `(H, W, channels)` integer samples and returns a 1-D
+byte buffer of `H × row_bytes`; `unpack` is its inverse, and `unpack ∘
+pack` is identity for every layout. Layouts are keyed by plain string,
+and the table is public. `channels(layout)` is 3, or 4 for a layout in
+`ALPHA_LAYOUTS`.
 
 The catalog is what pydecklink held (`§spec:pixel-packing` there) plus
-the one SDK format nothing packed: `argb`, `bgra`, `r210`, `r10b`,
-`r10l`, `v210`, `2vuy`, `r12b`, `r12l`. RGB layouts carry `[R, G, B]`;
+the SDK formats nothing packed: `argb`, `bgra`, `r210`, `r10b`, `r10l`,
+`v210`, `2vuy`, `r12b`, `r12l`, `ay10`. RGB layouts carry `[R, G, B]`;
 `v210` and `2vuy` carry `[Y, Cb, Cr]` with chroma sampled from even
 columns on pack and replicated on unpack, so identity holds when chroma
 agrees within each horizontal pair — inherent to 4:2:2, not a packing
-loss. Byte layouts are the format's own reference, and this document
-does not restate them.
+loss. `ay10` carries `[Y, Cb, Cr, A]`: 4:2:2 chroma as `v210`, and a
+per-pixel alpha at the layout's depth, full range. Byte layouts are the
+format's own reference, and this document does not restate them.
 
 Provenance, settled against FFmpeg, CoreVideo `CVPixelBuffer.h` and
 the DeckLink SDK 15.3 (`DeckLinkAPIModes.h`, manual section 3.4):
@@ -98,6 +100,7 @@ the DeckLink SDK 15.3 (`DeckLinkAPIModes.h`, manual section 3.4):
 | `r10b` | SDK spelling of a standard word | byte-identical to FFmpeg codec `r10k` and CoreVideo `30RGB` `'R10k'` |
 | `r10l` | SDK spelling | the `r10b` word little-endian; FFmpeg reads it only as `'R10k'` with `DpxE` extradata |
 | `r12b`, `r12l` | SDK only | no FFmpeg pixel format, codec or tag; FFmpeg's and GStreamer's DeckLink inputs refuse both |
+| `ay10` | SDK only | `bmdFormat10BitYUVA`, tag `'Ay10'`; no FFmpeg pixel format or codec. The `r210` word shape with `(A, Cb, Y)` for `(R, G, B)`; manual section 3.4 (15.3 p.254, 16.0 p.262) is the sole reference |
 
 **Why every layout moves and not v210 alone.** `r210` is uncompressed
 10-bit RGB 4:4:4 and is what an RGB 4:4:4 SDI feed needs; hoisting one
@@ -106,7 +109,14 @@ vendor-specific fact in the source module was the map from an SDK enum
 to a name; that map stays with the vendor binding, and this library
 never sees the enum. **Why `r10b` is not spelled `r10k`.** The key is
 the name a DeckLink consumer holds; the identity above tells an FFmpeg
-caller which layout reads its bytes.
+caller which layout reads its bytes. **Why alpha is a fourth channel
+and not a second array.** A keyed output is one frame whose alpha
+rides beside its colour in the same words; one `(H, W, 4)` array keeps
+that pairing in the caller's hands from encode to DMA, where a separate
+alpha argument would let the two drift in shape or device. The 8-bit
+ARGB and BGRA layouts keep writing alpha at peak: nothing drives them
+keyed, and a channel count that changed by layout would break every
+caller holding a three-channel frame.
 
 ## Encoding §spec:encoding
 
@@ -120,7 +130,10 @@ that wire format carries and refuses a keyword that contradicts them.
 `encode` and `decode` are each other's inverse to within half a code per
 component, round half to even in float32 on every backend so host and
 device agree, and take the same `xp` as the layouts. `legal_codes`
-returns the spans a level range represents at a depth.
+returns the spans a level range represents at a depth. An encoding
+covers the colour samples only: a layout in `ALPHA_LAYOUTS` names its
+depth and subsampling the same way, and the caller supplies alpha as a
+full-range code at that depth in the fourth channel.
 
 RGB outside [0, 1] clamps to the span's ends on encode, and decode clamps
 its output to [0, 1]: sub-black and super-white codes are representable
