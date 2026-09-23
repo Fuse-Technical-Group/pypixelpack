@@ -16,10 +16,12 @@ def test_import_pulls_no_other_array_backend() -> None:
 
 def test_public_surface() -> None:
     assert set(pypixelpack.__all__) == {
+        "ALPHA_LAYOUTS",
         "ENCODINGS",
         "LAYOUTS",
         "MATRICES",
         "SUBSAMPLED_422",
+        "channels",
         "decode",
         "encode",
         "encoding_for",
