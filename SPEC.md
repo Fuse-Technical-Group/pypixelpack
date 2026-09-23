@@ -100,7 +100,7 @@ the DeckLink SDK 15.3 (`DeckLinkAPIModes.h`, manual section 3.4):
 | `r10b` | SDK spelling of a standard word | byte-identical to FFmpeg codec `r10k` and CoreVideo `30RGB` `'R10k'` |
 | `r10l` | SDK spelling | the `r10b` word little-endian; FFmpeg reads it only as `'R10k'` with `DpxE` extradata |
 | `r12b`, `r12l` | SDK only | no FFmpeg pixel format, codec or tag; FFmpeg's and GStreamer's DeckLink inputs refuse both |
-| `ay10` | SDK only | `bmdFormat10BitYUVA`, tag `'Ay10'`; no FFmpeg pixel format or codec. The `r210` word shape with `(A, Cb, Y)` for `(R, G, B)`; manual §3.4 (15.3 p.254, 16.0 p.262) is the sole reference |
+| `ay10` | SDK only | `bmdFormat10BitYUVA`, tag `'Ay10'`; no FFmpeg pixel format or codec. The `r210` word shape with `(A, Cb, Y)` for `(R, G, B)`; manual section 3.4 (15.3 p.254, 16.0 p.262) is the sole reference |
 
 **Why every layout moves and not v210 alone.** `r210` is uncompressed
 10-bit RGB 4:4:4 and is what an RGB 4:4:4 SDI feed needs; hoisting one
