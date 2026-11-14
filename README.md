@@ -70,8 +70,10 @@ trusts its own inputs (`§spec:backend`).
 - `encode(rgb, *, matrix="bt709", levels="narrow", layout=None,
   bits=None, subsampling=None, xp=numpy)` — `(H, W, 3)` float RGB in
   `[0, 1]` to `(H, W, 3)` `uint16` `[Y, Cb, Cr]` (`§spec:encoding`).
-  `matrix` is `bt709` or `bt2020`; `levels` is `narrow` (luma 16–235,
-  chroma 16–240 at 8 bits, shifted up by `bits - 8`) or `full`.
+  `matrix` is `bt601`, `bt709` or `bt2020`; `levels` is `narrow` (luma
+  16–235, chroma 16–240 at 8 bits, shifted up by `bits - 8`), `full`,
+  or `fullprotect` (full range clamped off the codes an SDI-derived
+  interface reserves for timing: 4–1019 at 10 bits).
   `layout="v210"` selects the depth and subsampling that wire format
   expects — 10-bit 4:2:2; `2vuy` is 8-bit 4:2:2 — and a `bits` or
   `subsampling` that contradicts it is refused; without a layout they
@@ -82,16 +84,26 @@ trusts its own inputs (`§spec:backend`).
 - `decode(ycbcr, *, matrix, levels, layout=None, bits=None, xp=numpy)`
   — the inverse, per pixel, to within half a code per component;
   returns `float32` RGB clamped to `[0, 1]`.
+- `encode_rgb(rgb, *, levels="narrow", bits=10, xp=numpy)` — `(H, W, 3)`
+  float RGB in `[0, 1]` to `(H, W, 3)` `uint16` `[R, G, B]` codes, every
+  component on the luma span: 64–940 for 10-bit narrow range, 0–1023
+  for full, 4–1019 for `fullprotect`. Rounding and clamping follow
+  `encode`.
+- `decode_rgb(codes, *, levels="narrow", bits=10, xp=numpy)` — the
+  inverse, to within half a code per component; returns `float32` RGB
+  clamped to `[0, 1]`. `encode_rgb(decode_rgb(c)) == c` for every legal
+  code.
 - `encoding_for(layout)` — the `(bits, subsampling)` a layout carries;
   `ENCODINGS` is the table behind it.
 - `legal_codes(*, levels="narrow", bits=10)` — the `(luma, chroma)` code
   spans as `range` objects; `len(legal_codes().luma)` is 877, the levels
   10-bit narrow range can represent.
-- `MATRICES` — `name → (KR, KB)`: `bt709`, `bt2020`.
+- `MATRICES` — `name → (KR, KB)`: `bt601`, `bt709`, `bt2020`.
 
 `encode` and `decode` raise `ValueError` for an unknown matrix, levels or
 subsampling, a `bits` outside 8–16, or a layout with no component
-encoding.
+encoding. `encode_rgb` and `decode_rgb` raise it for an unknown levels or
+a `bits` outside 8–16.
 
 ## Development
 

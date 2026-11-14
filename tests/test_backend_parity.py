@@ -16,7 +16,7 @@ import pytest
 from conftest import frame, rgb_frame
 
 from pypixelpack import LAYOUTS, pack, row_bytes, unpack
-from pypixelpack.encoding import decode, encode
+from pypixelpack.encoding import decode, decode_rgb, encode, encode_rgb, legal_codes
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -119,8 +119,8 @@ def _assert_parity(
     )
 
 
-@pytest.mark.parametrize("matrix", ["bt709", "bt2020"])
-@pytest.mark.parametrize("levels", ["narrow", "full"])
+@pytest.mark.parametrize("matrix", ["bt601", "bt709", "bt2020"])
+@pytest.mark.parametrize("levels", ["narrow", "full", "fullprotect"])
 def test_encode_codes_agree_eager(matrix: str, levels: str) -> None:
     """The float32 agreement check over the parameter grid, eager only:
     matrix and levels change scalar constants, not the traced graph."""
@@ -146,3 +146,30 @@ def test_encode_codes_agree_eager_and_compiled(subsampling: str, width: int) -> 
 def test_decode_values_agree_eager_and_compiled() -> None:
     codes = frame("v210", _HEIGHT, _WIDTH - 1)
     _assert_parity(lambda c: decode(c, xp=torch), codes, decode(codes), torch.float32)
+
+
+@pytest.mark.parametrize("levels", ["narrow", "full", "fullprotect"])
+@pytest.mark.parametrize("bits", [8, 10, 12, 16])
+def test_encode_rgb_codes_agree_eager_and_compiled(levels: str, bits: int) -> None:
+    rgb = rgb_frame(_HEIGHT, _WIDTH, seed=bits)
+    _assert_parity(
+        lambda x: encode_rgb(x, levels=levels, bits=bits, xp=torch),
+        rgb,
+        encode_rgb(rgb, levels=levels, bits=bits),
+        torch.uint16,
+    )
+
+
+@pytest.mark.parametrize("levels", ["narrow", "full", "fullprotect"])
+@pytest.mark.parametrize("bits", [8, 10, 12, 16])
+def test_decode_rgb_values_agree_eager_and_compiled(levels: str, bits: int) -> None:
+    span = legal_codes(levels=levels, bits=bits).luma
+    rng = np.random.default_rng(bits)
+    codes = rng.integers(0, 1 << bits, size=(_HEIGHT, _WIDTH, 3)).astype(np.uint16)
+    codes[0, :2] = [[span[0]] * 3, [span[-1]] * 3]
+    _assert_parity(
+        lambda c: decode_rgb(c, levels=levels, bits=bits, xp=torch),
+        codes,
+        decode_rgb(codes, levels=levels, bits=bits),
+        torch.float32,
+    )

@@ -123,8 +123,8 @@ caller holding a three-channel frame.
 *Status: complete*
 
 An encoding maps RGB in [0, 1] to integer component samples and back: a
-colour matrix (`bt709`, `bt2020`), a level range (`narrow`, `full`), a
-chroma subsampling (`444`, or `422` by pair average) and a bit depth
+colour matrix (`bt601`, `bt709`, `bt2020`), a level range (`narrow`,
+`full`, `fullprotect`), a chroma subsampling (`444`, or `422` by pair average) and a bit depth
 from 8 to 16 — or a layout name, which selects the depth and subsampling
 that wire format carries and refuses a keyword that contradicts them.
 `encode` and `decode` are each other's inverse to within half a code per
@@ -134,6 +134,29 @@ returns the spans a level range represents at a depth. An encoding
 covers the colour samples only: a layout in `ALPHA_LAYOUTS` names its
 depth and subsampling the same way, and the caller supplies alpha as a
 full-range code at that depth in the fourth channel.
+
+`encode_rgb` and `decode_rgb` map the same float RGB to `[R, G, B]`
+codes at a level range and depth, with no matrix and no subsampling.
+Every component takes the luma span: narrow range quantises R, G and B
+as Y, `(219 E + 16) × 2^(n−8)` (ITU-R BT.709-6 item 3.4, BT.2100-3
+Table 9), so 10-bit narrow RGB runs 64..940 and full range every code.
+The rounding, the float32 arithmetic and the clamp are `encode`'s, and
+`encode_rgb ∘ decode_rgb` is identity on every legal code.
+
+`fullprotect` is ST 2110-20:2022 section 7.3's `RANGE=FULLPROTECT`,
+which that section defines as the permitted range of SMPTE RP 2077:2013
+section 5. RP 2077 equation (1) clamps a full-range code into
+`[CV_LOW, CV_HIGH]` and equation (2) carries a permitted code back
+unchanged, so `fullprotect` keeps full range's black, white, chroma
+midpoint and scale, and excludes the protected codes by clamping alone.
+Decode is full range's. RP 2077 leaves `CV_LOW` and `CV_HIGH` to the
+interface; this library takes the timing-reference codes of BT.709-6
+item 4.7 and BT.2100-3 Table 9, the codes whose top eight bits are all
+zero or all one: `[2^(n−8), 2^n − 2^(n−8) − 1]`, so 1..254 at 8 bits,
+4..1019 at 10, 16..4079 at 12 and 256..65279 at 16. Every component,
+chroma included, clamps to that span. ST 2110-20 permits `FULLPROTECT`
+only outside BT.2100 colorimetry; the library leaves that signalling
+rule to the transport.
 
 RGB outside [0, 1] clamps to the span's ends on encode, and decode clamps
 its output to [0, 1]: sub-black and super-white codes are representable
@@ -146,6 +169,16 @@ the coefficients cannot drift between them;
 a 10-bit narrow-range 4:2:2 encode packed to v210 here reproduces its
 bytes exactly.
 
+**Why RGB codes share the luma span.** An RGB wire format at narrow
+range carries R, G and B on luma's black and white; a separate span
+would let RGB and YCbCr disagree on what black is. **Why FULLPROTECT
+is a clamp and not a rescale.** RP 2077 section 5 maps full range onto
+a protected interface without scaling, so a full-range source keeps
+every code it can carry; rescaling onto the permitted span was rejected
+because it would move every code and match no sender that implements
+the RP. **Why the protected span follows the top eight bits.** BT.709-6
+and BT.2100-3 state it at 8, 10 and 12 bits, and 16 bits follows the
+same rule; neither ST 2110-20 nor RP 2077 fixes it per depth.
 **Why the matrix is a parameter.** v210 is a container; the colorimetry
 is signalled beside it, BT.709 for HD and BT.2020 for UHD. A constant
 serves one deployment and forks for the next. **Why narrow range is
