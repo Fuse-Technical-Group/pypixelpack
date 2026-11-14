@@ -1,3 +1,11 @@
+# [0.4.0](https://github.com/Fuse-Technical-Group/pypixelpack/compare/v0.3.0...v0.4.0) (2026-11-14)
+
+
+### Features
+
+* **encoding:** add RGB codes, the BT.601 matrix and FULLPROTECT range ([272ae5a](https://github.com/Fuse-Technical-Group/pypixelpack/commit/272ae5ae1e39f458534df3ad046c27b41a18b3f1))
+* **encoding:** refuse fullprotect at depths no standard defines ([9fb9c5b](https://github.com/Fuse-Technical-Group/pypixelpack/commit/9fb9c5b1d88b2ab1eef45ad32759b5eeab692f58))
+
 # [0.3.0](https://github.com/Fuse-Technical-Group/pypixelpack/compare/v0.2.0...v0.3.0) (2026-09-23)
 
 

@@ -4,7 +4,15 @@ numpy is the reference backend and the only import; any other array
 namespace is the caller's to supply (§spec:package-shape).
 """
 
-from pypixelpack.encoding import MATRICES, decode, encode, encoding_for, legal_codes
+from pypixelpack.encoding import (
+    MATRICES,
+    decode,
+    decode_rgb,
+    encode,
+    encode_rgb,
+    encoding_for,
+    legal_codes,
+)
 from pypixelpack.layouts import (
     ALPHA_LAYOUTS,
     ENCODINGS,
@@ -24,7 +32,9 @@ __all__ = [
     "SUBSAMPLED_422",
     "channels",
     "decode",
+    "decode_rgb",
     "encode",
+    "encode_rgb",
     "encoding_for",
     "legal_codes",
     "pack",

@@ -123,8 +123,9 @@ caller holding a three-channel frame.
 *Status: complete*
 
 An encoding maps RGB in [0, 1] to integer component samples and back: a
-colour matrix (`bt709`, `bt2020`), a level range (`narrow`, `full`), a
-chroma subsampling (`444`, or `422` by pair average) and a bit depth
+colour matrix (`bt601`, `bt709`, `bt2020`), a level range (`narrow`,
+`full`, `fullprotect`), a chroma subsampling (`444`, `422` or `420`) with a
+chroma siting, and a bit depth
 from 8 to 16 — or a layout name, which selects the depth and subsampling
 that wire format carries and refuses a keyword that contradicts them.
 `encode` and `decode` are each other's inverse to within half a code per
@@ -135,6 +136,43 @@ covers the colour samples only: a layout in `ALPHA_LAYOUTS` names its
 depth and subsampling the same way, and the caller supplies alpha as a
 full-range code at that depth in the fourth channel.
 
+`encode_rgb` and `decode_rgb` map the same float RGB to `[R, G, B]`
+codes at a level range and depth, with no matrix and no subsampling.
+Every component takes the luma span: narrow range quantises R, G and B
+as Y, `(219 E + 16) × 2^(n−8)` (ITU-R BT.709-6 item 3.4, BT.2100-3
+Table 9), so 10-bit narrow RGB runs 64..940 and full range every code.
+The rounding, the float32 arithmetic and the clamp are `encode`'s, and
+`encode_rgb ∘ decode_rgb` is identity on every legal code.
+
+`422` halves chroma along each row and `420` halves it along each row and
+then down each column. The siting places each chroma sample. `cosited`, the
+default, puts it on the even luma sample (and the even line, for `420`), as
+SMPTE ST 2036-1:2014 section 7.7 and ITU-R BT.709-6 site it. Encode filters
+by `[1 2 1] / 4` about that sample, computed as `(left + right) × 0.25 +
+centre × 0.5`, and decode interpolates each sample between two as their
+mean. `centred` puts the sample between the pixels it covers: encode
+averages each pair, along the row before down the column, and decode
+repeats each sample over its pixels. Off either end, both read the edge
+sample again, so an odd trailing column or row filters as its own pair. A
+subsampled array keeps the full `(H, W, 3)` shape, each chroma sample
+written to every pixel it covers; decode reads the sample from the pair's
+first pixel.
+
+`fullprotect` is ST 2110-20:2022 section 7.3's `RANGE=FULLPROTECT`,
+which that section defines as the permitted range of SMPTE RP 2077:2013
+section 5. RP 2077 equation (1) clamps a full-range code into
+`[CV_LOW, CV_HIGH]` and equation (2) carries a permitted code back
+unchanged, so `fullprotect` keeps full range's black, white, chroma
+midpoint and scale, and excludes the protected codes by clamping alone.
+Decode is full range's. RP 2077 leaves `CV_LOW` and `CV_HIGH` to the
+interface; this library takes the timing-reference codes of BT.709-6
+item 4.7 and BT.2100-3 Table 9, the codes whose top eight bits are all
+zero or all one: `[2^(n−8), 2^n − 2^(n−8) − 1]`, so 1..254 at 8 bits,
+4..1019 at 10 and 16..4079 at 12. Every component, chroma included,
+clamps to that span. `fullprotect` at any other depth shall be refused. ST 2110-20 permits `FULLPROTECT`
+only outside BT.2100 colorimetry; the library leaves that signalling
+rule to the transport.
+
 RGB outside [0, 1] clamps to the span's ends on encode, and decode clamps
 its output to [0, 1]: sub-black and super-white codes are representable
 on the wire but are not carried through this library's float RGB, which
@@ -143,9 +181,23 @@ is a display-referred convention, not a scene-referred one.
 Seeded verbatim from a GPU render pipeline's BT.709 narrow-range
 conversion, which serves its SDI and ST 2110 outputs from one matrix so
 the coefficients cannot drift between them;
-a 10-bit narrow-range 4:2:2 encode packed to v210 here reproduces its
-bytes exactly.
+a 10-bit narrow-range 4:2:2 encode with `siting="centred"`, packed to
+v210 here, reproduces its bytes exactly.
 
+**Why RGB codes share the luma span.** An RGB wire format at narrow
+range carries R, G and B on luma's black and white; a separate span
+would let RGB and YCbCr disagree on what black is. **Why FULLPROTECT
+is a clamp and not a rescale.** RP 2077 section 5 maps full range onto
+a protected interface without scaling, so a full-range source keeps
+every code it can carry; rescaling onto the permitted span was rejected
+because it would move every code and match no sender that implements
+the RP. **Why the protected span follows the top eight bits.** BT.709-6
+and BT.2100-3 state it at 8, 10 and 12 bits. **Why other depths are
+refused.** No standard states protected codes at 16 bits, since no SDI
+mapping carries 16-bit samples, and neither ST 2110-20 nor RP 2077 fixes
+them per depth. Extending the top-eight-bits rule to 16 bits was rejected:
+a span no source is known to use would clamp a real source's picture
+without warning, where a refusal names the gap.
 **Why the matrix is a parameter.** v210 is a container; the colorimetry
 is signalled beside it, BT.709 for HD and BT.2020 for UHD. A constant
 serves one deployment and forks for the next. **Why narrow range is
@@ -155,7 +207,13 @@ know which ones survive; the library exposes the representable set
 rather than rounding silently. **Why encoding lives with layout.** A
 measurement session defines a patch as what the processor receives and
 declares the encoding between that and the wire; the declaration is only
-meaningful if one implementation answers to it. **Why 4:2:2 keeps the
+meaningful if one implementation answers to it. **Why co-sited is the default.** The production
+standards site subsampled chroma on even samples, and a receiver that
+follows them shifts centred chroma half a pixel; the default is the one a
+conforming receiver reads correctly. A plain even-sample pick was rejected
+because it aliases, and the `[1 2 1]` filter costs one more tap. `centred`
+stays for an output whose receiver expects it and for byte-identity with
+pictures already encoded that way. **Why 4:2:2 keeps the
 full shape.** A 4:2:2 encode returns `(H, W, 3)` with chroma equal
 within each horizontal pair — what `pack` reads for a layout in
 `SUBSAMPLED_422` — rather than a half-width chroma plane, so one array
