@@ -68,8 +68,8 @@ trusts its own inputs (`§spec:backend`).
 ### Encoding
 
 - `encode(rgb, *, matrix="bt709", levels="narrow", layout=None,
-  bits=None, subsampling=None, xp=numpy)` — `(H, W, 3)` float RGB in
-  `[0, 1]` to `(H, W, 3)` `uint16` `[Y, Cb, Cr]` (`§spec:encoding`).
+  bits=None, subsampling=None, siting="cosited", xp=numpy)` — `(H, W, 3)`
+  float RGB in `[0, 1]` to `(H, W, 3)` `uint16` `[Y, Cb, Cr]` (`§spec:encoding`).
   `matrix` is `bt601`, `bt709` or `bt2020`; `levels` is `narrow` (luma
   16–235, chroma 16–240 at 8 bits, shifted up by `bits - 8`), `full`,
   or `fullprotect` (full range clamped off the codes an SDI-derived
@@ -78,13 +78,19 @@ trusts its own inputs (`§spec:backend`).
   `layout="v210"` selects the depth and subsampling that wire format
   expects — 10-bit 4:2:2; `2vuy` is 8-bit 4:2:2 — and a `bits` or
   `subsampling` that contradicts it is refused; without a layout they
-  default to 10 and `444`. `422` averages chroma over each horizontal
-  pair and writes it to both pixels, the shape `pack` reads. Rounding is
+  default to 10 and `444`. `422` halves chroma along each row and `420`
+  along each row and column, writing each sample to every pixel it covers,
+  the shape `pack` reads. `siting="cosited"`, the default, places chroma on
+  the even samples (and lines) as SMPTE ST 2036-1 and BT.709 do, filtered
+  `[1 2 1] / 4`; `siting="centred"` averages each pair instead. Rounding is
   half to even, arithmetic is float32 on every backend, and codes clamp
   to the level range's span.
-- `decode(ycbcr, *, matrix, levels, layout=None, bits=None, xp=numpy)`
-  — the inverse, per pixel, to within half a code per component;
-  returns `float32` RGB clamped to `[0, 1]`.
+- `decode(ycbcr, *, matrix, levels, layout=None, bits=None,
+  subsampling=None, siting="cosited", xp=numpy)` — the inverse, to within
+  half a code per component; returns `float32` RGB clamped to `[0, 1]`.
+  For a subsampled array, co-sited chroma is interpolated between samples
+  and centred chroma repeated over its pixels. Without a layout,
+  `subsampling` defaults to `444`, which reads each pixel's own chroma.
 - `encode_rgb(rgb, *, levels="narrow", bits=10, xp=numpy)` — `(H, W, 3)`
   float RGB in `[0, 1]` to `(H, W, 3)` `uint16` `[R, G, B]` codes, every
   component on the luma span: 64–940 for 10-bit narrow range, 0–1023
@@ -101,8 +107,9 @@ trusts its own inputs (`§spec:backend`).
   10-bit narrow range can represent.
 - `MATRICES` — `name → (KR, KB)`: `bt601`, `bt709`, `bt2020`.
 
-`encode` and `decode` raise `ValueError` for an unknown matrix, levels or
-subsampling, a `bits` outside 8–16, or a layout with no component
+`encode` and `decode` raise `ValueError` for an unknown matrix, levels,
+subsampling or siting, a `bits` outside 8–16, `fullprotect` outside 8, 10
+and 12 bits, or a layout with no component
 encoding. `encode_rgb` and `decode_rgb` raise it for an unknown levels or
 a `bits` outside 8–16.
 

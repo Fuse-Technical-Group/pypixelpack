@@ -124,7 +124,8 @@ caller holding a three-channel frame.
 
 An encoding maps RGB in [0, 1] to integer component samples and back: a
 colour matrix (`bt601`, `bt709`, `bt2020`), a level range (`narrow`,
-`full`, `fullprotect`), a chroma subsampling (`444`, or `422` by pair average) and a bit depth
+`full`, `fullprotect`), a chroma subsampling (`444`, `422` or `420`) with a
+chroma siting, and a bit depth
 from 8 to 16 — or a layout name, which selects the depth and subsampling
 that wire format carries and refuses a keyword that contradicts them.
 `encode` and `decode` are each other's inverse to within half a code per
@@ -142,6 +143,20 @@ as Y, `(219 E + 16) × 2^(n−8)` (ITU-R BT.709-6 item 3.4, BT.2100-3
 Table 9), so 10-bit narrow RGB runs 64..940 and full range every code.
 The rounding, the float32 arithmetic and the clamp are `encode`'s, and
 `encode_rgb ∘ decode_rgb` is identity on every legal code.
+
+`422` halves chroma along each row and `420` halves it along each row and
+then down each column. The siting places each chroma sample. `cosited`, the
+default, puts it on the even luma sample (and the even line, for `420`), as
+SMPTE ST 2036-1:2014 section 7.7 and ITU-R BT.709-6 site it. Encode filters
+by `[1 2 1] / 4` about that sample, computed as `(left + right) × 0.25 +
+centre × 0.5`, and decode interpolates each sample between two as their
+mean. `centred` puts the sample between the pixels it covers: encode
+averages each pair, along the row before down the column, and decode
+repeats each sample over its pixels. Off either end, both read the edge
+sample again, so an odd trailing column or row filters as its own pair. A
+subsampled array keeps the full `(H, W, 3)` shape, each chroma sample
+written to every pixel it covers; decode reads the sample from the pair's
+first pixel.
 
 `fullprotect` is ST 2110-20:2022 section 7.3's `RANGE=FULLPROTECT`,
 which that section defines as the permitted range of SMPTE RP 2077:2013
@@ -166,8 +181,8 @@ is a display-referred convention, not a scene-referred one.
 Seeded verbatim from a GPU render pipeline's BT.709 narrow-range
 conversion, which serves its SDI and ST 2110 outputs from one matrix so
 the coefficients cannot drift between them;
-a 10-bit narrow-range 4:2:2 encode packed to v210 here reproduces its
-bytes exactly.
+a 10-bit narrow-range 4:2:2 encode with `siting="centred"`, packed to
+v210 here, reproduces its bytes exactly.
 
 **Why RGB codes share the luma span.** An RGB wire format at narrow
 range carries R, G and B on luma's black and white; a separate span
@@ -192,7 +207,13 @@ know which ones survive; the library exposes the representable set
 rather than rounding silently. **Why encoding lives with layout.** A
 measurement session defines a patch as what the processor receives and
 declares the encoding between that and the wire; the declaration is only
-meaningful if one implementation answers to it. **Why 4:2:2 keeps the
+meaningful if one implementation answers to it. **Why co-sited is the default.** The production
+standards site subsampled chroma on even samples, and a receiver that
+follows them shifts centred chroma half a pixel; the default is the one a
+conforming receiver reads correctly. A plain even-sample pick was rejected
+because it aliases, and the `[1 2 1]` filter costs one more tap. `centred`
+stays for an output whose receiver expects it and for byte-identity with
+pictures already encoded that way. **Why 4:2:2 keeps the
 full shape.** A 4:2:2 encode returns `(H, W, 3)` with chroma equal
 within each horizontal pair — what `pack` reads for a layout in
 `SUBSAMPLED_422` — rather than a half-width chroma plane, so one array

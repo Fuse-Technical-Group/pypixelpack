@@ -4,8 +4,8 @@
 returns ``(height, width, 3)`` ``uint16`` ``[Y, Cb, Cr]`` codes;
 ``decode(ycbcr)`` returns ``float32`` RGB clamped to [0, 1]. An encoding
 is a colour matrix, a level range (``narrow``, ``full``,
-``fullprotect``), a chroma subsampling (``444``, or ``422`` by pair
-average) and a bit depth; a layout name selects the depth and
+``fullprotect``), a chroma subsampling (``444``, ``422`` or ``420``,
+co-sited with even samples or centred) and a bit depth; a layout name selects the depth and
 subsampling a wire format expects. ``encode_rgb`` and ``decode_rgb`` map
 the same float RGB to ``[R, G, B]`` codes at a level range and depth,
 with no matrix.
@@ -220,40 +220,129 @@ def _codes_444(xp: Any, y: Any, cb: Any, cr: Any, span: _Span) -> Any:
     )
 
 
-def _codes_422(xp: Any, y: Any, cb: Any, cr: Any, span: _Span) -> Any:
-    """Chroma averaged over each horizontal pair and written to both pixels.
+def _pad_even(xp: Any, plane: Any, axis: int) -> Any:
+    """Repeats the last row or column when the axis is odd, so it pairs."""
+    if plane.shape[axis] % 2 == 0:
+        return plane
+    edge = plane[-1:] if axis == 0 else plane[:, -1:]
+    return xp.concatenate((plane, edge), axis=axis)
 
-    Averaged on the normalised value, quantised at half width, then
-    broadcast into pair space beside per-pixel luma, so the chroma
-    arithmetic runs once per pair rather than once per pixel. An odd
-    trailing column is its own pair.
+
+def _along(axis: int, part: slice) -> tuple[slice, ...]:
+    """The index taking ``part`` of a plane's ``axis`` and all of the other."""
+    return (part, slice(None)) if axis == 0 else (slice(None), part)
+
+
+_EVEN, _ODD = slice(0, None, 2), slice(1, None, 2)
+
+
+def _centred(xp: Any, plane: Any, axis: int) -> Any:  # noqa: ARG001
+    """Each pair's mean along ``axis``, sited between its two samples."""
+    return (plane[_along(axis, _EVEN)] + plane[_along(axis, _ODD)]) * 0.5
+
+
+def _cosited(xp: Any, plane: Any, axis: int) -> Any:
+    """[1 2 1] / 4 about each even sample along ``axis``, sited on it.
+
+    The sample before the first is the first again. ``(left + right) *
+    0.25 + centre * 0.5`` rounds twice, at the sum and the last add; the
+    products by powers of two are exact, so a fused multiply-add on a GPU
+    gives the same result.
     """
-    height, width = y.shape
-    if width % 2:
-        y, cb, cr = (xp.concatenate((p, p[:, -1:]), axis=1) for p in (y, cb, cr))
-    pairs = y.shape[1] // 2
-
-    def halve(plane: Any) -> Any:
-        p = plane.reshape(height, pairs, 2)
-        return (p[..., 0] + p[..., 1]) * 0.5
-
-    y_q = _quantise(xp, y, span.luma_scale, span.black, span.luma)
-    y_q = y_q.reshape(height, pairs, 2)
-    cb_q = _quantise(xp, halve(cb), span.chroma_scale, span.chroma_mid, span.chroma)
-    cr_q = _quantise(xp, halve(cr), span.chroma_scale, span.chroma_mid, span.chroma)
-    shape = (height, pairs, 2)
-    codes = xp.stack(
-        (
-            y_q,
-            xp.broadcast_to(cb_q[..., None], shape),
-            xp.broadcast_to(cr_q[..., None], shape),
-        ),
-        axis=-1,
-    )
-    return codes.reshape(height, pairs * 2, 3)[:, :width]
+    even, odd = plane[_along(axis, _EVEN)], plane[_along(axis, _ODD)]
+    first = plane[_along(axis, slice(0, 1))]
+    left = xp.concatenate((first, odd[_along(axis, slice(0, -1))]), axis=axis)
+    t = left + odd
+    t *= 0.25
+    t += even * 0.5
+    return t
 
 
-_ASSEMBLE = {"444": _codes_444, "422": _codes_422}
+def _interleave(xp: Any, at: Any, between: Any, axis: int, size: int) -> Any:
+    """``at`` on the even positions of ``axis`` and ``between`` on the odd,
+    cut to ``size``."""
+    both = xp.stack((at, between), axis=axis + 1)
+    shape = list(at.shape)
+    shape[axis] *= 2
+    return both.reshape(shape)[_along(axis, slice(0, size))]
+
+
+def _repeat_up(xp: Any, samples: Any, axis: int, size: int) -> Any:
+    """Each sample written to both positions of its pair along ``axis``."""
+    return _interleave(xp, samples, samples, axis, size)
+
+
+def _interpolate_up(xp: Any, samples: Any, axis: int, size: int) -> Any:
+    """Each sample on its even position and the mean of its neighbours on
+    the odd position between; the odd position past the last sample takes
+    the last."""
+    rest = samples[_along(axis, slice(1, None))]
+    last = samples[_along(axis, slice(-1, None))]
+    after = xp.concatenate((rest, last), axis=axis)
+    return _interleave(xp, samples, (samples + after) * 0.5, axis, size)
+
+
+_SITINGS = {"cosited": _cosited, "centred": _centred}
+_UPSAMPLE = {"cosited": _interpolate_up, "centred": _repeat_up}
+_DEFAULT_SITING = "cosited"
+
+
+def _broadcast_chroma(
+    xp: Any, y_q: Any, cb_q: Any, cr_q: Any, rows: int, columns: int
+) -> Any:
+    """Codes at full shape, each subsampled chroma sample written to the
+    ``rows`` x ``columns`` block of pixels it covers."""
+    height, width = y_q.shape
+    shape = (height // rows, rows, width // columns, columns)
+
+    def spread(plane: Any) -> Any:
+        return xp.broadcast_to(plane[:, None, :, None], shape).reshape(height, width)
+
+    return xp.stack((y_q, spread(cb_q), spread(cr_q)), axis=-1)
+
+
+def _subsampled(rows: int) -> Any:
+    """An assembler halving chroma along each row and, for ``rows`` of 2,
+    down each column too, in the siting ``subsample`` places it.
+
+    Chroma is filtered on the normalised value along the row, then down the
+    column, quantised once at reduced size and broadcast back beside
+    per-pixel luma, so its arithmetic runs once a sample rather than once a
+    pixel. An odd trailing row or column is repeated, so it filters as its
+    own pair.
+    """
+
+    def assemble(xp: Any, y: Any, cb: Any, cr: Any, span: _Span, subsample: Any) -> Any:
+        height, width = y.shape
+        y = _pad_even(xp, y, 1)
+        if rows > 1:
+            y = _pad_even(xp, y, 0)
+
+        def chroma(plane: Any) -> Any:
+            half = subsample(xp, _pad_even(xp, plane, 1), 1)
+            if rows > 1:
+                half = subsample(xp, _pad_even(xp, half, 0), 0)
+            return _quantise(xp, half, span.chroma_scale, span.chroma_mid, span.chroma)
+
+        y_q = _quantise(xp, y, span.luma_scale, span.black, span.luma)
+        codes = _broadcast_chroma(xp, y_q, chroma(cb), chroma(cr), rows, 2)
+        return codes[:height, :width]
+
+    return assemble
+
+
+def _codes_444_any(
+    xp: Any,
+    y: Any,
+    cb: Any,
+    cr: Any,
+    span: _Span,
+    subsample: Any,  # noqa: ARG001 -- 4:4:4 has no chroma to place
+) -> Any:
+    return _codes_444(xp, y, cb, cr, span)
+
+
+_ASSEMBLE = {"444": _codes_444_any, "422": _subsampled(1), "420": _subsampled(2)}
 
 
 def encode(
@@ -264,14 +353,18 @@ def encode(
     layout: str | None = None,
     bits: int | None = None,
     subsampling: str | None = None,
+    siting: str = _DEFAULT_SITING,
     xp: Any = np,
 ) -> Any:
     """``(height, width, 3)`` float RGB in [0, 1] to ``uint16`` ``[Y, Cb, Cr]``.
 
     ``layout`` selects the depth and subsampling a wire format expects
     (``"v210"`` is 10-bit 4:2:2, ``"2vuy"`` 8-bit 4:2:2); otherwise
-    ``bits`` and ``subsampling`` default to 10 and ``"444"``. Codes clamp to the level range's span.
-    On ``xp``, on the input's device.
+    ``bits`` and ``subsampling`` default to 10 and ``"444"``. ``"422"``
+    and ``"420"`` place chroma where ``siting`` says: ``"cosited"`` on the
+    even samples (and lines), as ST 2036-1 and BT.709 site it, or
+    ``"centred"`` between them by plain average. Codes clamp to the level
+    range's span. On ``xp``, on the input's device.
     """
     kr, kg, kb = _matrix(matrix)
     bits, subsampling = _resolve(layout, bits, subsampling)
@@ -279,10 +372,13 @@ def encode(
     assemble = _ASSEMBLE.get(subsampling)
     if assemble is None:
         raise ValueError(f"unknown subsampling: {subsampling!r}")
+    subsample = _SITINGS.get(siting)
+    if subsample is None:
+        raise ValueError(f"unknown siting: {siting!r}")
     r, g, b = _channels(xp, rgb)
 
     y_n = kr * r + kg * g + kb * b
-    codes = assemble(xp, y_n, _chroma(b, y_n, kb), _chroma(r, y_n, kr), span)
+    codes = assemble(xp, y_n, _chroma(b, y_n, kb), _chroma(r, y_n, kr), span, subsample)
     return astype(codes, xp.uint16)
 
 
@@ -293,22 +389,44 @@ def decode(
     levels: str = "narrow",
     layout: str | None = None,
     bits: int | None = None,
+    subsampling: str | None = None,
+    siting: str = _DEFAULT_SITING,
     xp: Any = np,
 ) -> Any:
     """``(height, width, 3)`` integer ``[Y, Cb, Cr]`` to ``float32`` RGB in [0, 1].
 
-    Inverse of :func:`encode` to within half a code per component. Per
-    pixel: a 4:2:2 array as ``unpack`` or ``encode`` produce already has
-    its chroma in both pixels of each pair. Any integer dtype is accepted.
+    Inverse of :func:`encode` to within half a code per component. A
+    subsampled array as ``unpack`` or ``encode`` produce it carries each
+    chroma sample in every pixel of its pair (and row pair, for ``"420"``);
+    decode reads the sample from the pair's first pixel and places it as
+    ``siting`` says: ``"cosited"`` interpolates the pixels between samples,
+    ``"centred"`` repeats each sample over its pixels. ``"444"``, the
+    default without a layout, reads every pixel's own chroma. Any integer
+    dtype is accepted.
     """
     kr, kg, kb = _matrix(matrix)
-    bits, _ = _resolve(layout, bits, None)
+    bits, subsampling = _resolve(layout, bits, subsampling)
+    if subsampling not in _ASSEMBLE:
+        raise ValueError(f"unknown subsampling: {subsampling!r}")
+    upsample = _UPSAMPLE.get(siting)
+    if upsample is None:
+        raise ValueError(f"unknown siting: {siting!r}")
     span = _span(levels, bits)
     y, cb, cr = _channels(xp, ycbcr)
 
     y_n = (y - span.black) / span.luma_scale
     cb_n = (cb - span.chroma_mid) / span.chroma_scale
     cr_n = (cr - span.chroma_mid) / span.chroma_scale
+    if subsampling != "444":
+        height, width = y.shape
+
+        def place(plane: Any) -> Any:
+            plane = upsample(xp, plane[:, 0::2], 1, width)
+            if subsampling == "420":
+                plane = upsample(xp, plane[0::2], 0, height)
+            return plane
+
+        cb_n, cr_n = place(cb_n), place(cr_n)
 
     # Inverse matrix coefficients, YCbCr -> RGB; accumulated in place
     # with the addition order kept.
