@@ -137,22 +137,40 @@ def test_encode_codes_agree_eager(matrix: str, levels: str) -> None:
     np.testing.assert_array_equal(out.to(torch.int64).numpy(), encode(rgb, **kw))
 
 
+# Each subsampling at an even and an odd width; _HEIGHT is odd, so 4:2:0
+# meets a trailing row too.
+_SUBSAMPLED = [
+    (subsampling, siting, width)
+    for subsampling in ("422", "420")
+    for siting in ("cosited", "centred")
+    for width in (_WIDTH, _WIDTH - 1)
+]
+
+
 @pytest.mark.parametrize(
-    ("subsampling", "width"), [("444", _WIDTH), ("422", _WIDTH), ("422", _WIDTH - 1)]
+    ("subsampling", "siting", "width"), [("444", "cosited", _WIDTH), *_SUBSAMPLED]
 )
-def test_encode_codes_agree_eager_and_compiled(subsampling: str, width: int) -> None:
+def test_encode_codes_agree_eager_and_compiled(
+    subsampling: str, siting: str, width: int
+) -> None:
     rgb = rgb_frame(_HEIGHT, width, seed=1)
+    kw: dict[str, Any] = {"subsampling": subsampling, "siting": siting}
     _assert_parity(
-        lambda x: encode(x, subsampling=subsampling, xp=torch),
-        rgb,
-        encode(rgb, subsampling=subsampling),
-        torch.uint16,
+        lambda x: encode(x, **kw, xp=torch), rgb, encode(rgb, **kw), torch.uint16
     )
 
 
-def test_decode_values_agree_eager_and_compiled() -> None:
-    codes = frame("v210", _HEIGHT, _WIDTH - 1)
-    _assert_parity(lambda c: decode(c, xp=torch), codes, decode(codes), torch.float32)
+@pytest.mark.parametrize(
+    ("subsampling", "siting", "width"), [("444", "cosited", _WIDTH - 1), *_SUBSAMPLED]
+)
+def test_decode_values_agree_eager_and_compiled(
+    subsampling: str, siting: str, width: int
+) -> None:
+    codes = encode(rgb_frame(_HEIGHT, width, seed=2), subsampling=subsampling)
+    kw: dict[str, Any] = {"subsampling": subsampling, "siting": siting}
+    _assert_parity(
+        lambda c: decode(c, **kw, xp=torch), codes, decode(codes, **kw), torch.float32
+    )
 
 
 @pytest.mark.parametrize(("levels", "bits"), _LEVEL_DEPTHS)
