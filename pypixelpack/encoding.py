@@ -3,9 +3,12 @@
 ``encode(rgb)`` takes ``(height, width, 3)`` float RGB in [0, 1] and
 returns ``(height, width, 3)`` ``uint16`` ``[Y, Cb, Cr]`` codes;
 ``decode(ycbcr)`` returns ``float32`` RGB clamped to [0, 1]. An encoding
-is a colour matrix, a level range (``narrow``, ``full``), a chroma
-subsampling (``444``, or ``422`` by pair average) and a bit depth; a
-layout name selects the depth and subsampling a wire format expects.
+is a colour matrix, a level range (``narrow``, ``full``,
+``fullprotect``), a chroma subsampling (``444``, or ``422`` by pair
+average) and a bit depth; a layout name selects the depth and
+subsampling a wire format expects. ``encode_rgb`` and ``decode_rgb`` map
+the same float RGB to ``[R, G, B]`` codes at a level range and depth,
+with no matrix.
 Both directions take the array namespace as ``xp`` (§spec:backend), and
 every array operation is whole-array, so the torch path traces under
 ``torch.compile``.
@@ -29,24 +32,34 @@ __all__ = [
     "MATRICES",
     "LegalCodes",
     "decode",
+    "decode_rgb",
     "encode",
+    "encode_rgb",
     "encoding_for",
     "legal_codes",
 ]
 
 # Luma coefficients (KR, KB) per matrix; KG is what remains.
 MATRICES: dict[str, tuple[float, float]] = {
+    "bt601": (0.299, 0.114),  # ITU-R BT.601-7 section 2.5.1
     "bt709": (0.2126, 0.0722),  # ITU-R BT.709-6 Table 3
     "bt2020": (0.2627, 0.0593),  # ITU-R BT.2020-2 Table 4
 }
 
-# Narrow range is defined from 8 bits up (BT.709-6 section 4.4: luma 16
-# to 235, chroma 16 to 240 about 128), shifted up by ``bits - 8``. Full
-# range is every code, chroma about ``2^(bits-1)`` (H.273 with
-# VideoFullRangeFlag set). Codes are carried as uint16.
+# Narrow range is defined from 8 bits up (BT.709-6 items 3.4 and 4.6:
+# R, G, B and Y 16 to 235, chroma 16 to 240 about 128), shifted up by
+# ``bits - 8``; R, G and B share the luma span. Full range is every
+# code, chroma about ``2^(bits-1)`` (H.273 with VideoFullRangeFlag set).
+# FULLPROTECT is full range clamped off the codes an SDI-derived
+# interface reserves for timing (ST 2110-20:2022 section 7.3, SMPTE RP
+# 2077:2013 section 5). Codes are carried as uint16.
 _MIN_BITS, _MAX_BITS = 8, 16
 _NARROW_8BIT = {"luma": (16, 235), "chroma": (16, 240), "chroma_mid": 128}
-_LEVELS = ("narrow", "full")
+_LEVELS = ("narrow", "full", "fullprotect")
+# The depths BT.709-6 item 4.7 and BT.2100-3 Table 9 state the protected
+# codes at. No standard states them at another depth, and a guessed span
+# would clamp a real source's picture wrongly, so other depths are refused.
+_FULLPROTECT_BITS = (8, 10, 12)
 _DEFAULT_BITS, _DEFAULT_SUBSAMPLING = 10, "444"
 
 
@@ -68,11 +81,19 @@ class LegalCodes(NamedTuple):
 
 
 class _Span(NamedTuple):
-    """Legal luma and chroma codes, and the achromatic chroma code."""
+    """Legal codes, and the scale that maps a normalised value onto them.
+
+    The scale is separate from the legal span because FULLPROTECT clamps
+    full range without rescaling it: its codes run 4..1019 at 10 bits
+    while black and white stay at 0 and 1023.
+    """
 
     luma: range
     chroma: range
     chroma_mid: int
+    black: int
+    luma_scale: int
+    chroma_scale: int
 
 
 def _matrix(name: str) -> tuple[float, float, float]:
@@ -88,16 +109,32 @@ def _span(levels: str, bits: int) -> _Span:
         raise ValueError(f"unknown levels: {levels!r}")
     if not _MIN_BITS <= bits <= _MAX_BITS:
         raise ValueError(f"bits must be within {_MIN_BITS}..{_MAX_BITS}, got {bits}")
+    shift = bits - _MIN_BITS
     if levels == "narrow":
-        shift = bits - _MIN_BITS
         (y_lo, y_hi), (c_lo, c_hi) = _NARROW_8BIT["luma"], _NARROW_8BIT["chroma"]
+        luma = range(y_lo << shift, (y_hi << shift) + 1)
+        chroma = range(c_lo << shift, (c_hi << shift) + 1)
         return _Span(
-            range(y_lo << shift, (y_hi << shift) + 1),
-            range(c_lo << shift, (c_hi << shift) + 1),
+            luma,
+            chroma,
             _NARROW_8BIT["chroma_mid"] << shift,
+            luma.start,
+            len(luma) - 1,
+            len(chroma) - 1,
         )
-    every = range(1 << bits)
-    return _Span(every, every, 1 << (bits - 1))
+    peak = (1 << bits) - 1
+    legal = range(1 << bits)
+    if levels == "fullprotect":
+        if bits not in _FULLPROTECT_BITS:
+            raise ValueError(
+                f"fullprotect is defined at {_FULLPROTECT_BITS} bits, got {bits}"
+            )
+        # The protected codes are those whose top eight bits are all zero
+        # or all one: 0 and 255 at 8 bits, 0-3 and 1020-1023 at 10, 0-15
+        # and 4080-4095 at 12 (BT.709-6 item 4.7, BT.2100-3 Table 9).
+        reserved = 1 << shift
+        legal = range(reserved, (1 << bits) - reserved)
+    return _Span(legal, legal, 1 << (bits - 1), 0, peak, peak)
 
 
 def legal_codes(*, levels: str = "narrow", bits: int = _DEFAULT_BITS) -> LegalCodes:
@@ -151,16 +188,16 @@ def _channels(xp: Any, pixels: Any) -> tuple[Any, Any, Any]:
     return arr[..., 0], arr[..., 1], arr[..., 2]
 
 
-def _quantise(xp: Any, normalised: Any, span: range, offset: int) -> Any:
-    """A normalised component to its code: scale, offset, round, clamp.
+def _quantise(xp: Any, normalised: Any, scale: int, offset: int, legal: range) -> Any:
+    """Maps a normalised component to its code: scale, offset, round, clamp.
 
     In place after the first product — four full-frame temporaries
     become one, and the operation order is unchanged.
     """
-    t = normalised * (len(span) - 1)
+    t = normalised * scale
     t += offset
     xp.round(t, out=t)
-    xp.clip(t, span.start, span[-1], out=t)
+    xp.clip(t, legal.start, legal[-1], out=t)
     return t
 
 
@@ -175,9 +212,9 @@ def _chroma(component: Any, y_n: Any, k: float) -> Any:
 def _codes_444(xp: Any, y: Any, cb: Any, cr: Any, span: _Span) -> Any:
     return xp.stack(
         (
-            _quantise(xp, y, span.luma, span.luma.start),
-            _quantise(xp, cb, span.chroma, span.chroma_mid),
-            _quantise(xp, cr, span.chroma, span.chroma_mid),
+            _quantise(xp, y, span.luma_scale, span.black, span.luma),
+            _quantise(xp, cb, span.chroma_scale, span.chroma_mid, span.chroma),
+            _quantise(xp, cr, span.chroma_scale, span.chroma_mid, span.chroma),
         ),
         axis=-1,
     )
@@ -200,9 +237,10 @@ def _codes_422(xp: Any, y: Any, cb: Any, cr: Any, span: _Span) -> Any:
         p = plane.reshape(height, pairs, 2)
         return (p[..., 0] + p[..., 1]) * 0.5
 
-    y_q = _quantise(xp, y, span.luma, span.luma.start).reshape(height, pairs, 2)
-    cb_q = _quantise(xp, halve(cb), span.chroma, span.chroma_mid)
-    cr_q = _quantise(xp, halve(cr), span.chroma, span.chroma_mid)
+    y_q = _quantise(xp, y, span.luma_scale, span.black, span.luma)
+    y_q = y_q.reshape(height, pairs, 2)
+    cb_q = _quantise(xp, halve(cb), span.chroma_scale, span.chroma_mid, span.chroma)
+    cr_q = _quantise(xp, halve(cr), span.chroma_scale, span.chroma_mid, span.chroma)
     shape = (height, pairs, 2)
     codes = xp.stack(
         (
@@ -268,9 +306,9 @@ def decode(
     span = _span(levels, bits)
     y, cb, cr = _channels(xp, ycbcr)
 
-    y_n = (y - span.luma.start) / (len(span.luma) - 1)
-    cb_n = (cb - span.chroma_mid) / (len(span.chroma) - 1)
-    cr_n = (cr - span.chroma_mid) / (len(span.chroma) - 1)
+    y_n = (y - span.black) / span.luma_scale
+    cb_n = (cb - span.chroma_mid) / span.chroma_scale
+    cr_n = (cr - span.chroma_mid) / span.chroma_scale
 
     # Inverse matrix coefficients, YCbCr -> RGB; accumulated in place
     # with the addition order kept.
@@ -283,5 +321,43 @@ def decode(
     blue += y_n
 
     rgb = xp.stack((red, green, blue), axis=-1)
+    xp.clip(rgb, 0.0, 1.0, out=rgb)
+    return rgb
+
+
+def encode_rgb(
+    rgb: Any, *, levels: str = "narrow", bits: int = _DEFAULT_BITS, xp: Any = np
+) -> Any:
+    """Maps ``(height, width, 3)`` float RGB in [0, 1] to ``uint16`` ``[R, G, B]``.
+
+    Every component takes the luma span of ``levels`` at ``bits``: 64..940
+    for 10-bit narrow range, every code for full range. Codes clamp to
+    that span. On ``xp``, on the input's device.
+    """
+    span = _span(levels, bits)
+    codes = xp.stack(
+        tuple(
+            _quantise(xp, c, span.luma_scale, span.black, span.luma)
+            for c in _channels(xp, rgb)
+        ),
+        axis=-1,
+    )
+    return astype(codes, xp.uint16)
+
+
+def decode_rgb(
+    codes: Any, *, levels: str = "narrow", bits: int = _DEFAULT_BITS, xp: Any = np
+) -> Any:
+    """Maps ``(height, width, 3)`` integer ``[R, G, B]`` to ``float32`` RGB in [0, 1].
+
+    Inverse of :func:`encode_rgb` to within half a code per component;
+    sub-black and super-white codes clamp to 0 and 1. Any integer dtype
+    is accepted.
+    """
+    span = _span(levels, bits)
+    rgb = xp.stack(
+        tuple((c - span.black) / span.luma_scale for c in _channels(xp, codes)),
+        axis=-1,
+    )
     xp.clip(rgb, 0.0, 1.0, out=rgb)
     return rgb
