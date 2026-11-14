@@ -24,6 +24,13 @@ if TYPE_CHECKING:
 torch = pytest.importorskip("torch")
 
 _HEIGHT, _WIDTH = 3, 18  # 18 spans 3 v210 groups and 3 r12 groups with padding
+# Every level range at every depth it is defined at: fullprotect stops at 12.
+_LEVEL_DEPTHS = [
+    (levels, bits)
+    for levels in ("narrow", "full", "fullprotect")
+    for bits in (8, 10, 12, 16)
+    if not (levels == "fullprotect" and bits == 16)
+]
 _EXTRA_ROW_BYTES = 8  # exercise the zero padding past the active line
 
 
@@ -148,8 +155,7 @@ def test_decode_values_agree_eager_and_compiled() -> None:
     _assert_parity(lambda c: decode(c, xp=torch), codes, decode(codes), torch.float32)
 
 
-@pytest.mark.parametrize("levels", ["narrow", "full", "fullprotect"])
-@pytest.mark.parametrize("bits", [8, 10, 12, 16])
+@pytest.mark.parametrize(("levels", "bits"), _LEVEL_DEPTHS)
 def test_encode_rgb_codes_agree_eager_and_compiled(levels: str, bits: int) -> None:
     rgb = rgb_frame(_HEIGHT, _WIDTH, seed=bits)
     _assert_parity(
@@ -160,8 +166,7 @@ def test_encode_rgb_codes_agree_eager_and_compiled(levels: str, bits: int) -> No
     )
 
 
-@pytest.mark.parametrize("levels", ["narrow", "full", "fullprotect"])
-@pytest.mark.parametrize("bits", [8, 10, 12, 16])
+@pytest.mark.parametrize(("levels", "bits"), _LEVEL_DEPTHS)
 def test_decode_rgb_values_agree_eager_and_compiled(levels: str, bits: int) -> None:
     span = legal_codes(levels=levels, bits=bits).luma
     rng = np.random.default_rng(bits)

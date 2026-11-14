@@ -73,7 +73,8 @@ trusts its own inputs (`§spec:backend`).
   `matrix` is `bt601`, `bt709` or `bt2020`; `levels` is `narrow` (luma
   16–235, chroma 16–240 at 8 bits, shifted up by `bits - 8`), `full`,
   or `fullprotect` (full range clamped off the codes an SDI-derived
-  interface reserves for timing: 4–1019 at 10 bits).
+  interface reserves for timing: 4–1019 at 10 bits; defined at 8, 10
+  and 12 bits and refused at any other depth).
   `layout="v210"` selects the depth and subsampling that wire format
   expects — 10-bit 4:2:2; `2vuy` is 8-bit 4:2:2 — and a `bits` or
   `subsampling` that contradicts it is refused; without a layout they

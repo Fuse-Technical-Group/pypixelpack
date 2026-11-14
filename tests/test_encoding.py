@@ -158,7 +158,7 @@ def test_bt709_fullprotect_golden_codes(
     assert encode(_rgb(rgb), levels="fullprotect")[0, 0].tolist() == list(ycbcr)
 
 
-@pytest.mark.parametrize("bits", [8, 10, 12, 16])
+@pytest.mark.parametrize("bits", [8, 10, 12])
 def test_fullprotect_is_full_clamped_and_decodes_as_full(bits: int) -> None:
     """RP 2077:2013 equation (1) clamps a full-range code into the permitted
     span; equation (2) carries a permitted code back unchanged, so decode
@@ -231,6 +231,23 @@ def test_unknown_parameters_are_refused() -> None:
         decode(np.zeros((1, 1, 3), np.uint16), matrix="bt470")
 
 
+@pytest.mark.parametrize("bits", [9, 11, 14, 16])
+def test_fullprotect_is_refused_where_no_standard_defines_it(bits: int) -> None:
+    """BT.709-6 item 4.7 and BT.2100-3 Table 9 state the protected codes at
+    8, 10 and 12 bits only, so any other depth is refused, not inferred."""
+    rgb = _rgb((0.5, 0.5, 0.5))
+    codes = np.zeros((1, 1, 3), np.uint16)
+    for call in (
+        lambda: legal_codes(levels="fullprotect", bits=bits),
+        lambda: encode(rgb, levels="fullprotect", bits=bits),
+        lambda: decode(codes, levels="fullprotect", bits=bits),
+        lambda: encode_rgb(rgb, levels="fullprotect", bits=bits),
+        lambda: decode_rgb(codes, levels="fullprotect", bits=bits),
+    ):
+        with pytest.raises(ValueError, match="fullprotect"):
+            call()
+
+
 # --- the representable set --------------------------------------------------
 
 
@@ -245,7 +262,6 @@ def test_unknown_parameters_are_refused() -> None:
         ("fullprotect", 8, range(1, 255), range(1, 255)),
         ("fullprotect", 10, range(4, 1020), range(4, 1020)),
         ("fullprotect", 12, range(16, 4080), range(16, 4080)),
-        ("fullprotect", 16, range(256, 65280), range(256, 65280)),
     ],
 )
 def test_legal_codes_per_levels_and_depth(
@@ -358,6 +374,13 @@ def test_chroma_mid_is_the_code_a_neutral_patch_carries() -> None:
 # --- RGB codes --------------------------------------------------------------
 
 _LEVELS = ("narrow", "full", "fullprotect")
+# Every level range at every depth it is defined at: fullprotect stops at 12.
+_LEVEL_DEPTHS = [
+    (levels, bits)
+    for levels in _LEVELS
+    for bits in (8, 10, 12, 16)
+    if not (levels == "fullprotect" and bits == 16)
+]
 
 
 @pytest.mark.parametrize(
@@ -403,8 +426,7 @@ def test_decode_rgb_returns_float32_in_unit_range() -> None:
     assert out[0, 1].tolist() == [0.0, 1.0, 0.0]
 
 
-@pytest.mark.parametrize("levels", _LEVELS)
-@pytest.mark.parametrize("bits", [8, 10, 12, 16])
+@pytest.mark.parametrize(("levels", "bits"), _LEVEL_DEPTHS)
 def test_decode_rgb_inverts_encode_rgb_within_half_a_code(
     levels: str, bits: int
 ) -> None:
@@ -423,8 +445,7 @@ def test_decode_rgb_inverts_encode_rgb_within_half_a_code(
     assert float(error.max()) <= 0.5 / scale + 1e-6
 
 
-@pytest.mark.parametrize("levels", _LEVELS)
-@pytest.mark.parametrize("bits", [8, 10, 12, 16])
+@pytest.mark.parametrize(("levels", "bits"), _LEVEL_DEPTHS)
 def test_encode_rgb_inverts_decode_rgb_for_every_legal_code(
     levels: str, bits: int
 ) -> None:

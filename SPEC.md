@@ -153,8 +153,8 @@ Decode is full range's. RP 2077 leaves `CV_LOW` and `CV_HIGH` to the
 interface; this library takes the timing-reference codes of BT.709-6
 item 4.7 and BT.2100-3 Table 9, the codes whose top eight bits are all
 zero or all one: `[2^(n−8), 2^n − 2^(n−8) − 1]`, so 1..254 at 8 bits,
-4..1019 at 10, 16..4079 at 12 and 256..65279 at 16. Every component,
-chroma included, clamps to that span. ST 2110-20 permits `FULLPROTECT`
+4..1019 at 10 and 16..4079 at 12. Every component, chroma included,
+clamps to that span. `fullprotect` at any other depth shall be refused. ST 2110-20 permits `FULLPROTECT`
 only outside BT.2100 colorimetry; the library leaves that signalling
 rule to the transport.
 
@@ -177,8 +177,12 @@ a protected interface without scaling, so a full-range source keeps
 every code it can carry; rescaling onto the permitted span was rejected
 because it would move every code and match no sender that implements
 the RP. **Why the protected span follows the top eight bits.** BT.709-6
-and BT.2100-3 state it at 8, 10 and 12 bits, and 16 bits follows the
-same rule; neither ST 2110-20 nor RP 2077 fixes it per depth.
+and BT.2100-3 state it at 8, 10 and 12 bits. **Why other depths are
+refused.** No standard states protected codes at 16 bits, since no SDI
+mapping carries 16-bit samples, and neither ST 2110-20 nor RP 2077 fixes
+them per depth. Extending the top-eight-bits rule to 16 bits was rejected:
+a span no source is known to use would clamp a real source's picture
+without warning, where a refusal names the gap.
 **Why the matrix is a parameter.** v210 is a container; the colorimetry
 is signalled beside it, BT.709 for HD and BT.2020 for UHD. A constant
 serves one deployment and forks for the next. **Why narrow range is

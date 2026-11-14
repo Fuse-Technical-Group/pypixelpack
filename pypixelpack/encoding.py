@@ -56,6 +56,10 @@ MATRICES: dict[str, tuple[float, float]] = {
 _MIN_BITS, _MAX_BITS = 8, 16
 _NARROW_8BIT = {"luma": (16, 235), "chroma": (16, 240), "chroma_mid": 128}
 _LEVELS = ("narrow", "full", "fullprotect")
+# The depths BT.709-6 item 4.7 and BT.2100-3 Table 9 state the protected
+# codes at. No standard states them at another depth, and a guessed span
+# would clamp a real source's picture wrongly, so other depths are refused.
+_FULLPROTECT_BITS = (8, 10, 12)
 _DEFAULT_BITS, _DEFAULT_SUBSAMPLING = 10, "444"
 
 
@@ -121,6 +125,10 @@ def _span(levels: str, bits: int) -> _Span:
     peak = (1 << bits) - 1
     legal = range(1 << bits)
     if levels == "fullprotect":
+        if bits not in _FULLPROTECT_BITS:
+            raise ValueError(
+                f"fullprotect is defined at {_FULLPROTECT_BITS} bits, got {bits}"
+            )
         # The protected codes are those whose top eight bits are all zero
         # or all one: 0 and 255 at 8 bits, 0-3 and 1020-1023 at 10, 0-15
         # and 4080-4095 at 12 (BT.709-6 item 4.7, BT.2100-3 Table 9).
