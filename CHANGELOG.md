@@ -1,3 +1,10 @@
+# [0.5.0](https://github.com/Fuse-Technical-Group/pypixelpack/compare/v0.4.0...v0.5.0) (2026-11-14)
+
+
+### Features
+
+* **encoding:** co-site subsampled chroma by default, and add 4:2:0 ([6a5cf07](https://github.com/Fuse-Technical-Group/pypixelpack/commit/6a5cf07ad891e9ecac13c375ec81e0b26c7f0580))
+
 # [0.4.0](https://github.com/Fuse-Technical-Group/pypixelpack/compare/v0.3.0...v0.4.0) (2026-11-14)
 
 
