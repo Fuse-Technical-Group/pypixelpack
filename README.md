@@ -115,10 +115,11 @@ a `bits` outside 8–16.
 
 ## Development
 
-```sh
-uv sync
-uv run ruff format --check . && uv run ruff check . && uv run pyright && uv run pytest
+```bash
+uvx --from "git+https://github.com/repentsinner/bug-free-happiness@v0.10.0#subdirectory=.github/tools/python" bfh-check
 ```
+
+`bfh-check` runs the checks CI runs, at CI's tool versions: `uv sync --locked`, ruff's lint and format checks, pyright, and pytest. Its release is the one `.github/workflows/quality.yml` pins.
 
 `uv sync` installs torch (CPU) into the dev group so the parity suite
 runs; without it those tests skip. To prove the wheel on numpy alone:
