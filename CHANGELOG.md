@@ -1,3 +1,10 @@
+## [0.5.1](https://github.com/Fuse-Technical-Group/pypixelpack/compare/v0.5.0...v0.5.1) (2026-11-16)
+
+
+### Bug Fixes
+
+* **layouts:** refuse negative values and short rows, and pack empty frames ([56d177c](https://github.com/Fuse-Technical-Group/pypixelpack/commit/56d177c2c2485dc005c20ad2966f1dd39da2f372))
+
 # [0.5.0](https://github.com/Fuse-Technical-Group/pypixelpack/compare/v0.4.0...v0.5.0) (2026-11-14)
 
 
