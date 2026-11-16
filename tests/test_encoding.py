@@ -241,6 +241,8 @@ def test_unknown_parameters_are_refused() -> None:
             encode(rgb, bits=bits)
     with pytest.raises(ValueError, match="subsampling"):
         encode(rgb, subsampling="411")
+    with pytest.raises(ValueError, match="unknown subsampling: '411'"):
+        decode(encode(rgb), subsampling="411")
     with pytest.raises(ValueError, match="matrix"):
         decode(np.zeros((1, 1, 3), np.uint16), matrix="bt470")
 
