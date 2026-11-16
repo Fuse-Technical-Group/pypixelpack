@@ -48,9 +48,7 @@ packages = ["pypixelpack"]
 
 [dependency-groups]
 dev = [
-    "pyright>=1.1.403",
     "pytest>=8.4.1",
-    "ruff>=0.12.3",
     # The parity suite's second backend (§spec:backend). Dev-only: torch is
     # never a runtime dependency, and CPU wheels keep CI honest and small.
     "torch>=2.8",
