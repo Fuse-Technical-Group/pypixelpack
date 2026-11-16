@@ -7,9 +7,21 @@ per-depth dtype rule with it.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
+from hypothesis import settings
 
 from pypixelpack import LAYOUTS, SUBSAMPLED_422, channels
+
+# Hypothesis profiles for tests/test_properties.py. The default keeps CI
+# within seconds; HYPOTHESIS_PROFILE=thorough draws a hundred times as many
+# examples, for a local search before a release or after a codec change.
+# Neither has a deadline: these properties check values, not speed, and on
+# a loaded host a timed-out example would fail a correct codec.
+settings.register_profile("default", max_examples=100, deadline=None, print_blob=True)
+settings.register_profile("thorough", max_examples=10_000, deadline=None)
+settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
 
 
 def frame(layout: str, height: int, width: int, seed: int = 0) -> np.ndarray:
