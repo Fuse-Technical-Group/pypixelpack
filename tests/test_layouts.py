@@ -359,6 +359,36 @@ def test_value_out_of_range_raises() -> None:
         pack(px, "r12b", row_bytes=36)
 
 
+def test_negative_value_raises() -> None:
+    """A negative value is as far outside the range as one past the top; in
+    a signed array it would otherwise pack as a word with every bit set."""
+    px = np.array([[[-1, 0, 0]]], dtype=np.int32)
+    with pytest.raises(ValueError, match="10-bit"):
+        pack(px, "r210", row_bytes=4)
+
+
+@pytest.mark.parametrize("layout", list(LAYOUTS))
+def test_an_empty_frame_packs_to_its_padding(layout: str) -> None:
+    """No rows pack to no bytes, and rows of no pixels to their padding."""
+    nch = channels(layout)
+    none = pack(np.zeros((0, 4, nch), np.uint16), layout, row_bytes(layout, 4))
+    assert none.dtype == np.uint8
+    assert none.size == 0
+    out = pack(np.zeros((2, 0, nch), np.uint16), layout, row_bytes=8)
+    assert out.dtype == np.uint8
+    assert out.tolist() == [0] * 16
+    back = unpack(out, layout, width=0, height=2, row_bytes=8)
+    assert back.shape == (2, 0, nch)
+    assert back.dtype == (np.uint8 if LAYOUTS[layout][2] == 8 else np.uint16)
+
+
+def test_unpack_refuses_rows_too_short_for_the_width() -> None:
+    """A row shorter than the width needs is refused, as pack refuses it,
+    rather than read back as a narrower frame."""
+    with pytest.raises(ValueError, match="row_bytes"):
+        unpack(np.zeros(64, np.uint8), "v210", width=12, height=2, row_bytes=16)
+
+
 def test_data_too_small_raises() -> None:
-    with pytest.raises(ValueError, match="too small"):
+    with pytest.raises(ValueError, match="got 4 bytes, need 8"):
         unpack(np.zeros(4, np.uint8), "argb", width=2, height=1, row_bytes=8)

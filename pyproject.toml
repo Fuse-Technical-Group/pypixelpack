@@ -48,6 +48,9 @@ packages = ["pypixelpack"]
 
 [dependency-groups]
 dev = [
+    # Property tests (tests/test_properties.py): generated frames and
+    # encodings, shrunk to the smallest that fails.
+    "hypothesis>=6.140",
     "pytest>=8.4.1",
     # The parity suite's second backend (§spec:backend). Dev-only: torch is
     # never a runtime dependency, and CPU wheels keep CI honest and small.

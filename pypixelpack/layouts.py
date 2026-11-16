@@ -171,13 +171,26 @@ def pack(pixels: Any, layout: str, row_bytes: int, *, xp: Any = np) -> Any:
             f"({layout!r} needs at least {min_row})"
         )
 
+    # No pixels: each row is all padding, and no rows is no bytes. The
+    # codecs reshape by group, which an empty array cannot do.
+    if not height or not width:
+        return xp.zeros((height * row_bytes,), dtype=xp.uint8, device=arr.device)
+
     # A host-side assertion on the unwidened input: a compiler cannot
     # trace it (see _backend). torch has no uint16 reduction, so that
-    # one dtype widens to int32 for the read.
-    if not is_compiling(xp) and height and width:
+    # one dtype widens to int32 for the read. Only a signed array can
+    # fall below zero, and a negative value would pack as a word of set
+    # bits.
+    if not is_compiling(xp):
         probe = astype(arr, xp.int32) if arr.dtype == xp.uint16 else arr
-        if int(probe.max()) > (1 << bits) - 1:
-            raise ValueError(f"pixel value exceeds {bits}-bit range for {layout!r}")
+        unsigned = arr.dtype in (xp.uint8, xp.uint16)
+        if int(probe.max()) > (1 << bits) - 1 or (
+            not unsigned and int(probe.min()) < 0
+        ):
+            raise ValueError(
+                f"pixel value outside the {bits}-bit range 0..{(1 << bits) - 1} "
+                f"for {layout!r}"
+            )
 
     # 8-bit layouts shuffle bytes and never shift; the rest work in int64.
     src = astype(arr, xp.uint8 if bits == 8 else xp.int64)
@@ -215,13 +228,25 @@ def unpack(
     Inverse of :func:`pack`. Returns ``uint8`` values for 8-bit layouts and
     ``uint16`` for 10/12-bit layouts, on ``xp``, on the input's device.
     """
+    min_row = _min_row_bytes(layout, width)
+    if row_bytes < min_row:
+        raise ValueError(
+            f"row_bytes={row_bytes} too small for width={width} "
+            f"({layout!r} needs at least {min_row})"
+        )
     buf = astype(xp.asarray(data), xp.uint8).reshape(-1)
     if buf.shape[0] < height * row_bytes:
         raise ValueError(
             f"data too small: got {buf.shape[0]} bytes, need {height * row_bytes}"
         )
+    if not height or not width:
+        bits = LAYOUTS[layout][2]
+        dtype = xp.uint8 if bits == 8 else xp.uint16
+        return xp.zeros(
+            (height, width, channels(layout)), dtype=dtype, device=buf.device
+        )
     rows = buf[: height * row_bytes].reshape(height, row_bytes)
-    group_data = rows[:, : _min_row_bytes(layout, width)]
+    group_data = rows[:, :min_row]
 
     _, unpacker = _CODECS[layout]
     return unpacker(xp, layout, group_data)[:, :width, :]

@@ -121,6 +121,13 @@ uvx --from "git+https://github.com/repentsinner/bug-free-happiness@v0.10.0#subdi
 
 `bfh-check` runs the checks CI runs, at CI's tool versions: `uv sync --locked`, ruff's lint and format checks, pyright, and pytest. Its release is the one `.github/workflows/quality.yml` pins.
 
+`tests/test_properties.py` checks the layouts and encodings on frames
+Hypothesis generates, and shrinks a failure to the smallest frame that
+shows it. CI draws 100 examples a property; for a longer search before a
+release or after a codec change, run
+`HYPOTHESIS_PROFILE=thorough uv run pytest tests/test_properties.py`,
+which draws 10,000.
+
 `uv sync` installs torch (CPU) into the dev group so the parity suite
 runs; without it those tests skip. To prove the wheel on numpy alone:
 
